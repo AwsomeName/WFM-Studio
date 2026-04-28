@@ -1,0 +1,11 @@
+# WFM Studio - 项目根 .gitignore
+# （wfm-ide/、wfm-agents/ 内部各自维护自己的 .gitignore）
+
+# dev.sh 的运行期目录：日志 / pid 文件
+.wfm-dev/
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+wfm-agents-ref/

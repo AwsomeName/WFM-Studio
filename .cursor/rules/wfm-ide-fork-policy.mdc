@@ -1,0 +1,59 @@
+---
+description: WFM Studio 对 wfm-ide（vscode fork）的定制与升级守则
+alwaysApply: true
+---
+
+# wfm-ide 定制与升级守则
+
+`wfm-ide/` 通过 `git subtree` 纳入本仓库，`upstream-vscode` 指向 `microsoft/vscode`。所有定制必须遵守以下规则，否则未来 `subtree pull` 会冲突爆炸。详细说明见 `docs/VSCODE_UPSTREAM.md`。
+
+## 核心准则（四条硬规则）
+
+1. **新代码一律写进 `wfm-ide/src/vs/workbench/contrib/wfm/`**，不要散落到其它 `contrib/*`。
+2. **能"新增"就别"修改"**：替换功能时优先新建模块 + 在注册层切换，避免改上游源码。
+3. **必须修改的上游文件，逐条登记到 `docs/UPSTREAM_PATCHES.md`**（升级对账单）。
+4. **品牌/图标等二进制资源直接覆盖同路径同名文件**，不要改 `product.json` 里的路径字段。
+
+## 裁剪功能的正确做法
+
+❌ 不要删 `contrib/terminal/` 等目录。  
+✅ 改 `wfm-ide/src/vs/workbench/workbench.common.main.ts`，注释对应 import 即可：
+
+```typescript
+// import 'vs/workbench/contrib/terminal/browser/terminal.contribution';  // 已注释：WFM 精简工作台
+```
+
+## 冲突风险分区
+
+| 区域 | 风险 | 策略 |
+|------|------|------|
+| `contrib/wfm/**`（新增） | 几乎 0 | 你的代码主场 |
+| 替换 `resources/**/*.icns` 等二进制 | 低 | 直接覆盖 |
+| `product.json` 字段值修改 | 低-中 | 只改值，不改结构 |
+| `workbench.common.main.ts` 注释 import | 中 | 登记到 UPSTREAM_PATCHES.md |
+| 修改 vscode 原有功能代码 | 高 | 新建模块替换，别就地改 |
+| `src/vs/editor/`、`src/vs/platform/` | 非常高 | 禁止触碰 |
+
+## 品牌与 Logo
+
+- 产品名：改 `product.json` 的 `nameShort` / `nameLong` / `applicationName` / `dataFolderName` **字段值**。
+- 图标：**替换** `resources/darwin/*.icns`、`resources/win32/*.ico`、`resources/linux/*.png` 的文件内容，路径和文件名保持不变。
+- 欢迎页：新建 `contrib/wfm/welcome/`，不要改 `contrib/welcomeGettingStarted/`。
+
+## 升级 vscode 标准流程
+
+```bash
+cd /Users/lc/Desktop/WFM
+git checkout -b chore/upstream-<version>
+git fetch upstream-vscode
+git subtree pull --prefix=wfm-ide upstream-vscode <tag-or-branch> --squash
+```
+
+冲突只会在 `UPSTREAM_PATCHES.md` 登记的文件里出现。解决后 `./scripts/code.sh` 冒烟验证，再合回 main。
+
+## 提交信息约定
+
+- `feat(wfm-ide): ...` 我们自己的 `contrib/wfm` 代码
+- `chore(wfm-ide): ...` 裁剪注册、改配置
+- `chore(brand): ...` logo、product.json
+- `chore(upstream): pull vscode <version>` 升级上游
