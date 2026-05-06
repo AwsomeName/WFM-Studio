@@ -10,6 +10,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..crewai_runtime import CrewRuntimeConfigError
+from ..engines.anthropic_errors import AnthropicApiError, AnthropicConfigError
+from ..engines.devui_engine import DevUIBridgeError
 from ..gateway.agent_gateway import get_default_agent_gateway
 from ..gateway.exceptions import EngineNotInstalledError
 from ..gateway.models import EngineId, TurnRequest
@@ -38,7 +40,7 @@ class ChatRequest(BaseModel):
     )
     engine: EngineId | None = Field(
         default=None,
-        description="编排引擎；默认 crewai（与 TurnRequest 对齐）。",
+        description="编排引擎；默认 crewai。可选 maf、agenticx、anthropic（后者需 extras）。",
     )
 
 
@@ -79,15 +81,27 @@ async def chat(req: ChatRequest) -> ChatReply:
         result = await gateway.run_turn(turn)
     except CrewRuntimeConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except AnthropicConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except AnthropicApiError as exc:
+        raise HTTPException(
+            status_code=min(max(exc.status_code, 400), 599),
+            detail=str(exc),
+        ) from exc
     except EngineNotInstalledError as exc:
         raise HTTPException(
             status_code=400,
             detail=f"{err_codes.ENGINE_NOT_INSTALLED}: {exc.hint}",
         ) from exc
+    except DevUIBridgeError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=f"{exc.code}: {exc}",
+        ) from exc
     except Exception as exc:  # pragma: no cover - runtime provider/network errors
         raise HTTPException(
             status_code=502,
-            detail=f"CrewAI 执行失败: {type(exc).__name__}: {exc}",
+            detail=f"{err_codes.ENGINE_ERROR}: 引擎执行失败: {type(exc).__name__}: {exc}",
         ) from exc
 
     return ChatReply(

@@ -1,41 +1,15 @@
-"""Microsoft Agent Framework engine (M5 — stub)."""
+"""Microsoft Agent Framework engine backed by local DevUI."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Any, ClassVar
+from typing import ClassVar
 
-import asyncio
-
-from ..gateway.exceptions import EngineNotInstalledError
-from ..gateway.models import ErrorStreamEvent, StreamEvent, TurnResult
-from ..gateway.session import SessionContext
-from ..observability import errors as err
-from ..tools.handle import ToolHandle
+from .devui_engine import DevUIEngine
 
 
-class MafEngine:
+class MafEngine(DevUIEngine):
     engine_id: ClassVar[str] = "maf"
-
-    def run_turn(self, ctx: SessionContext, tools: ToolHandle) -> TurnResult:
-        raise EngineNotInstalledError(
-            self.engine_id,
-            "MAF 适配尚未启用：安装可选依赖后重试（例如 pip install 'wfm-agents[maf]'）。",
-        )
-
-    async def stream_turn(
-        self,
-        ctx: SessionContext,
-        tools: ToolHandle,
-        *,
-        tool_event_queue: asyncio.Queue[Any] | None = None,
-        is_disconnected: Callable[[], Awaitable[bool]] | None = None,
-    ) -> AsyncIterator[StreamEvent]:
-        yield ErrorStreamEvent(
-            type="error",
-            code=err.ENGINE_NOT_INSTALLED,
-            message=(
-                "MAF 适配尚未启用：安装可选依赖后重试（例如 pip install 'wfm-agents[maf]'）。"
-            ),
-            trace_id=ctx.trace_id,
-        )
+    env_base_url: ClassVar[str] = "WFM_MAF_DEVUI_URL"
+    default_base_url: ClassVar[str] = "http://127.0.0.1:18082"
+    env_entity_id: ClassVar[str] = "WFM_MAF_ENTITY_ID"
+    default_entity_id: ClassVar[str] = "agent_weather"

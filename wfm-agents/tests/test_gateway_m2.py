@@ -8,7 +8,7 @@ from typing import ClassVar
 import pytest
 
 from wfm_agents.gateway.agent_gateway import AgentGateway, reset_default_agent_gateway_for_tests
-from wfm_agents.gateway.exceptions import EngineNotInstalledError
+from wfm_agents.engines.devui_engine import DevUIEngine
 from wfm_agents.gateway.models import (
     DoneStreamEvent,
     TextDeltaStreamEvent,
@@ -64,15 +64,20 @@ async def test_run_turn_propagates_trace_id(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_maf_engine_not_installed(tmp_path) -> None:
+async def test_maf_engine_adapter_runs(tmp_path, monkeypatch) -> None:
     root = str(resolve_workspace_root(str(tmp_path)))
+    monkeypatch.setattr(DevUIEngine, "_call_devui_response", lambda self, ctx: "maf-ok")
     gw = AgentGateway(
         providers=[BuiltinToolProvider()],
         engine_registry=build_default_engine_registry(),
     )
-    with pytest.raises(EngineNotInstalledError) as ei:
-        await gw.run_turn(TurnRequest(workspace_root=root, message="x", engine="maf"))
-    assert ei.value.engine_id == "maf"
+    out = await gw.run_turn(TurnRequest(workspace_root=root, message="x", engine="maf"))
+    assert out.content == "maf-ok"
+
+
+def test_devui_extract_text_prefers_output_text() -> None:
+    body = {"output_text": "hello from output_text", "output": []}
+    assert DevUIEngine._extract_text(body) == "hello from output_text"
 
 
 @pytest.fixture(autouse=True)

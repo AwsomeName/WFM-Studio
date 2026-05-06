@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from wfm_agents.engines.crewai_engine import CrewAIEngine
+from wfm_agents.engines.devui_engine import DevUIEngine
 from wfm_agents.engines.registry import EngineRegistry
 from wfm_agents.gateway.agent_gateway import AgentGateway
 from wfm_agents.gateway.models import TurnRequest, TurnResult
@@ -54,7 +55,8 @@ def test_chat_stream_echo_text_delta_and_done(client: TestClient, tmp_path) -> N
     assert done.get("trace_id")
 
 
-def test_chat_stream_maf_engine_not_installed(client: TestClient, tmp_path) -> None:
+def test_chat_stream_maf_engine_adapter(client: TestClient, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(DevUIEngine, "_call_devui_response", lambda self, ctx: "maf-stream-ok")
     with client.stream(
         "POST",
         "/v1/chat/stream",
@@ -63,8 +65,8 @@ def test_chat_stream_maf_engine_not_installed(client: TestClient, tmp_path) -> N
         assert resp.status_code == 200
         body = b"".join(resp.iter_bytes()).decode("utf-8")
     events = _parse_sse_events(body)
-    assert events and events[-1]["type"] == "error"
-    assert events[-1]["code"] == "ENGINE_NOT_INSTALLED"
+    assert any(e["type"] == "text_delta" and "maf-stream-ok" in e.get("delta", "") for e in events)
+    assert events and events[-1]["type"] == "done"
 
 
 def test_chat_stream_crewai_config_error_event(client: TestClient, tmp_path, monkeypatch) -> None:

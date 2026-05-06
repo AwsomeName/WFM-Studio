@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from wfm_agents.engines.devui_engine import DevUIBridgeError, DevUIEngine
 from wfm_agents.server import create_app
 
 
@@ -61,7 +62,8 @@ def test_chat_echo_mode_explicit(client: TestClient, tmp_path: Path) -> None:
     assert "explicit" in body["content"]
 
 
-def test_chat_engine_maf_not_installed(client: TestClient, tmp_path: Path) -> None:
+def test_chat_engine_maf_adapter(client: TestClient, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(DevUIEngine, "_call_devui_response", lambda self, ctx: "maf-ok")
     resp = client.post(
         "/v1/chat",
         json={
@@ -70,11 +72,13 @@ def test_chat_engine_maf_not_installed(client: TestClient, tmp_path: Path) -> No
             "engine": "maf",
         },
     )
-    assert resp.status_code == 400
-    assert "ENGINE_NOT_INSTALLED" in resp.json()["detail"]
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["content"] == "maf-ok"
 
 
-def test_chat_engine_agenticx_minimal(client: TestClient, tmp_path: Path) -> None:
+def test_chat_engine_agenticx_minimal(client: TestClient, tmp_path: Path, monkeypatch) -> None:
+    # AgenticX now goes through the same DevUI adapter path.
+    monkeypatch.setattr(DevUIEngine, "_call_devui_response", lambda self, ctx: "agenticx-ok")
     resp = client.post(
         "/v1/chat",
         json={
@@ -85,8 +89,47 @@ def test_chat_engine_agenticx_minimal(client: TestClient, tmp_path: Path) -> Non
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert "[agenticx]" in body["content"]
-    assert str(tmp_path.resolve()) in body["content"]
+    assert body["content"] == "agenticx-ok"
+
+
+def test_chat_engine_maf_connect_error_code(client: TestClient, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        DevUIEngine,
+        "_call_devui_response",
+        lambda self, ctx: (_ for _ in ()).throw(
+            DevUIBridgeError("ENGINE_CONNECT_ERROR", "connect failed", status_code=502)
+        ),
+    )
+    resp = client.post(
+        "/v1/chat",
+        json={
+            "workspace_root": str(tmp_path),
+            "message": "ping",
+            "engine": "maf",
+        },
+    )
+    assert resp.status_code == 502
+    assert resp.json()["detail"].startswith("ENGINE_CONNECT_ERROR:")
+
+
+def test_chat_engine_maf_upstream_4xx_code(client: TestClient, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        DevUIEngine,
+        "_call_devui_response",
+        lambda self, ctx: (_ for _ in ()).throw(
+            DevUIBridgeError("ENGINE_UPSTREAM_4XX", "bad request", status_code=400)
+        ),
+    )
+    resp = client.post(
+        "/v1/chat",
+        json={
+            "workspace_root": str(tmp_path),
+            "message": "ping",
+            "engine": "maf",
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"].startswith("ENGINE_UPSTREAM_4XX:")
 
 
 def test_chat_crewai_mode_requires_model(client: TestClient, tmp_path: Path) -> None:

@@ -18,6 +18,7 @@ class SessionContext:
     message: str = ""
     session_id: str | None = None
     recipe_id: str | None = None
+    model_override: str | None = None
     client_meta: dict[str, Any] | None = None
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     tool_policy: ToolPolicy | None = None

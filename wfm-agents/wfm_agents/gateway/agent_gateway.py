@@ -44,6 +44,7 @@ class AgentGateway:
             message=req.message,
             session_id=req.session_id,
             recipe_id=req.recipe_id,
+            model_override=req.model_override,
             client_meta=req.client_meta,
             tool_policy=self._default_policy,
         )
@@ -68,6 +69,7 @@ class AgentGateway:
             message=req.message,
             session_id=req.session_id,
             recipe_id=req.recipe_id,
+            model_override=req.model_override,
             client_meta=req.client_meta,
             tool_policy=self._default_policy,
         )

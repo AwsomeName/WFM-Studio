@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-EngineId = Literal["crewai", "maf", "agenticx"]
+EngineId = Literal["crewai", "maf", "agenticx", "anthropic"]
 
 
 class TurnRequest(BaseModel):

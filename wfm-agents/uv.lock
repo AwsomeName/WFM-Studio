@@ -171,6 +171,62 @@ wheels = [
 ]
 
 [[package]]
+name = "anthropic"
+version = "0.80.0"
+source = { editable = "../third_party/anthropics/anthropic-sdk-python" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "docstring-parser" },
+    { name = "httpx" },
+    { name = "jiter" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", marker = "extra == 'aiohttp'" },
+    { name = "anyio", specifier = ">=3.5.0,<5" },
+    { name = "boto3", marker = "extra == 'bedrock'", specifier = ">=1.28.57" },
+    { name = "botocore", marker = "extra == 'bedrock'", specifier = ">=1.31.57" },
+    { name = "distro", specifier = ">=1.7.0,<2" },
+    { name = "docstring-parser", specifier = ">=0.15,<1" },
+    { name = "google-auth", extras = ["requests"], marker = "extra == 'vertex'", specifier = ">=2,<3" },
+    { name = "httpx", specifier = ">=0.25.0,<1" },
+    { name = "httpx-aiohttp", marker = "extra == 'aiohttp'", specifier = ">=0.1.9" },
+    { name = "jiter", specifier = ">=0.4.0,<1" },
+    { name = "pydantic", specifier = ">=1.9.0,<3" },
+    { name = "sniffio" },
+    { name = "typing-extensions", specifier = ">=4.10,<5" },
+]
+provides-extras = ["aiohttp", "vertex", "bedrock"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "boto3-stubs", specifier = ">=1" },
+    { name = "dirty-equals", specifier = ">=0.6.0" },
+    { name = "griffe", specifier = ">=1" },
+    { name = "importlib-metadata", specifier = ">=6.7.0" },
+    { name = "inline-snapshot", specifier = ">=0.28.0" },
+    { name = "mypy", specifier = "==1.17" },
+    { name = "pyright", specifier = "==1.1.399" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-xdist", specifier = ">=3.6.1" },
+    { name = "respx" },
+    { name = "rich", specifier = ">=13.7.1" },
+    { name = "ruff" },
+    { name = "time-machine" },
+]
+pydantic-v1 = [{ name = "pydantic", specifier = ">=1.9.0,<2" }]
+pydantic-v2 = [
+    { name = "pydantic", marker = "python_full_version < '3.14'", specifier = "~=2.0" },
+    { name = "pydantic", marker = "python_full_version >= '3.14'", specifier = "~=2.12" },
+]
+
+[[package]]
 name = "anyio"
 version = "4.13.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3517,7 +3573,11 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+anthropic = [
+    { name = "anthropic" },
+]
 dev = [
+    { name = "anthropic" },
     { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -3525,6 +3585,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anthropic", marker = "extra == 'anthropic'", editable = "../third_party/anthropics/anthropic-sdk-python" },
+    { name = "anthropic", marker = "extra == 'dev'", editable = "../third_party/anthropics/anthropic-sdk-python" },
     { name = "crewai", specifier = ">=1.14.2" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
@@ -3535,7 +3597,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
-provides-extras = ["dev", "agenticx"]
+provides-extras = ["dev", "agenticx", "maf", "anthropic"]
 
 [[package]]
 name = "yarl"
