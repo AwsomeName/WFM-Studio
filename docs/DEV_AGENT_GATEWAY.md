@@ -1,4 +1,4 @@
-# WFM Agent 网关 — 研发推进手册
+# Uni-Studio Agent 网关 — 研发推进手册
 
 > **用途**：给 AI / 工程师按步推进实现的操作手册。  
 > **规格来源**：`docs/ARCH_AGENT_GATEWAY.md`（契约、硬规范、默认参数、错误码）。  
@@ -90,7 +90,9 @@ wfm-agents/wfm_agents/
 | M3 | **流式 SSE**（v1 必须） | `/v1/chat/stream`、事件类型冻结 | 是 |
 | M4 | MCP 聚合 | `MCPCluster` + YAML + `mcp.*` 投影 + reload | 否（可与 M5 并行） |
 | M5 | MAF / AgenticX 适配 | 引擎 stub（未装返 `ENGINE_NOT_INSTALLED`），装后能过冒烟 | 否 |
-| M6 | Eval harness | fixtures + 三引擎对比跑 + CSV 报表 | 否 |
+| M6 | **Eval harness**（🔄 in-progress，`feat/backend-eval` 分支） | fixtures + 四引擎对比（CrewAI/Anthropic/MAF/AgenticX） + CSV 报表 | 否 |
+| M7 | PPTX ToolProvider | `uni.pptx_read`/`uni.pptx_write`/`uni.pptx_slide_edit`/`uni.pptx_render_slide`/`uni.pptx_to_pptist`/`uni.pptist_to_pptx` + HTTP 路由 | 否（`feat/ppt-editor` 分支） |
+| M8 | Proposal ToolProvider | `uni.proposal_outline`/`uni.proposal_write_section`/`uni.proposal_review`/`uni.proposal_format` + HTTP 路由 | 否（`feat/doc-generation` 分支） |
 
 每个里程碑完成后：`pytest` 全绿、README 更新、`PLAN.md` 的 Step 勾选更新。
 
@@ -337,22 +339,77 @@ wfm-agents/wfm_agents/
 
 ---
 
-### M6 — Eval harness
+### M6 — Eval harness（🔄 in-progress，`feat/backend-eval` 分支）
 
-**目标**：同一 fixture 切换 `engine`，导出对比数据。
+**目标**：同一 fixture 切换 `engine`，对比已拉取代码的四引擎，导出对比数据。
 
 **动作**：
 
-1. 新目录 `wfm-agents/eval/`：
+1. 新目录 `wfm-agents/tests/eval/`：
    - `fixtures/*.json`：每份含 `workspace_seed`（预置文件）、`message`、`expected_tool_sequence`。
-   - `run.py`：循环 `engine in ["crewai", "maf", "agenticx"]`（未装则 skip）；调用 `/v1/chat/stream` 收集 `tool_ledger`、`latency`、`usage`。
+   - `eval_harness.py`：发送相同 TurnRequest 到 4 引擎（crewai/anthropic/maf/agenticx），记录时间/工具成功率/输出。
+   - `eval_scenarios.py`：5 个场景 fixture（基础对话 / 文件读取 / PPT 大纲 / 标书完整生成 / 错误恢复）。
+   - `eval_report.py`：生成对比矩阵（JSON + markdown）。
    - 输出 `eval/results/{timestamp}.csv`，列：`engine, fixture, ok, tool_sequence_match, latency_ms, input_tokens, output_tokens, cost_usd, error_code`。
 2. **不做** LLM-as-judge 自动化（见 ARCH §10）。
+3. **深度改造探索**：
+   - 研究 CrewAI 内部 tool 调用机制，探索能否走 ToolHandle
+   - 研究 MAF/AgenticX SDK，探索能否绕过 DevUI proxy 直用 SDK + ToolHandle
+   - Anthropic 引擎流式增强：`client.messages.stream()` 实现 token-by-token TextDelta
 
 **验收**：
 
 - `uv run python -m eval.run --fixtures eval/fixtures --out eval/results` 生成 CSV 文件。
 - CSV 行数 ≥ fixtures 数 × 可用引擎数。
+- 产出 `docs/EVAL_REPORT.md`：选定主引擎 + 备选引擎。
+
+---
+
+### M7 — PPTX ToolProvider（`feat/ppt-editor` 分支）
+
+**目标**：提供 PPTX 读写 + PPTist 双向转换工具，供 PPT 编辑器调用。
+
+**动作**：
+
+1. 新建 `tools/pptx_provider.py`：
+   - 注册 6 个工具：`uni.pptx_read`/`uni.pptx_write`/`uni.pptx_slide_edit`/`uni.pptx_render_slide`/`uni.pptx_to_pptist`/`uni.pptist_to_pptx`
+   - 工具实现用 `python-pptx`，所有路径通过 `resolve_within` 安全校验
+2. `pyproject.toml` 加 `python-pptx>=1.0.2` 依赖
+3. 注册 `PptxToolProvider` 入 `AgentGateway` providers 列表
+4. 新建 `routes/pptx_ops.py`：4 条 HTTP 路由
+5. 注册入 `server.py`
+
+**约束**：
+- 工具一律通过 `ToolHandle.invoke` 被引擎调用（硬规范）
+- HTTP 路由是 ToolProvider 的薄包装
+
+**验收**：
+- pytest 覆盖：PPTX 读写、PPTist 转换、越界路径拒绝
+- 详细规格见 `docs/ARCH_PPT_EDITOR.md`
+
+---
+
+### M8 — Proposal ToolProvider（`feat/doc-generation` 分支）
+
+**目标**：提供标书/方案生成工具，供 AI 工作流调用。
+
+**动作**：
+
+1. 新建 `tools/proposal_provider.py`：
+   - 注册 4 个工具：`uni.proposal_outline`/`uni.proposal_write_section`/`uni.proposal_review`/`uni.proposal_format`
+   - 工具背后调用 LLM，但通过 ToolHandle 统一接口
+2. 注册 `ProposalToolProvider` 入 `AgentGateway` providers 列表
+3. 新建 `routes/proposal_ops.py`：3 条 HTTP 路由
+4. 注册入 `server.py`
+
+**约束**：
+- 工具一律通过 `ToolHandle.invoke` 被引擎调用（硬规范）
+- recipe_id `uni.proposal_generate` 的具体实现取决于 M6 eval 结果（硬依赖）
+- 详细规格见 `docs/ARCH_DOC_GENERATION.md`
+
+**验收**：
+- pytest 覆盖：outline 生成、section 撰写、review 评分、format 输出
+- 产出 `docs/EVAL_REPORT.md`：选定主引擎 + 备选引擎。
 
 ---
 

@@ -1,30 +1,35 @@
-# WFM Studio — 开发计划（深度定制路线）
+# Uni-Studio — 开发计划（深度定制路线）
 
-> 版本：v0.6 &nbsp;|&nbsp; 更新日期：2026-04-22（引用 `ARCH_AGENT_GATEWAY.md`、第一版含流式 SSE）
+> 版本：v0.7 &nbsp;|&nbsp; 更新日期：2026-05-07（品牌更名为 Uni-Studio；加 PPT 编辑器混合方案、标书生成、后端框架评估、并行分支策略）
 >
 > 路线决策：
 > 1. **直接 Fork Code OSS，深度定制 UI，不走插件路线。**
-> 2. **近期优先级调整：最小 AI 闭环 > 品牌换皮 > 工作台精简。**  
+> 2. **近期优先级调整：最小 AI 闭环 > 品牌换皮 > 工作台精简。**
 >    先让 OSS 前端与自建 Agent 后端在"工作区"维度打通，再回头做换皮与裁剪。
+> 3. **品牌更名为 Uni-Studio**（v0.7 新增），除大标题外尽量中文化。
+> 4. **PPT 编辑器采用混合方案**：整体生成用 python-pptx + AI，精细编辑嵌入 PPTist（v0.7 新增）。
+> 5. **新增标书/方案生成工作流**（v0.7 新增 Phase 7）。
+> 6. **新增后端框架对比评估**（v0.7 新增 Phase 8），对比已有代码的 CrewAI / Anthropic / MAF / AgenticX 四引擎。
+> 7. **并行分支开发策略**（v0.7 新增，详见 `docs/MERGE_STRATEGY.md`）。
 
 ---
 
 ## 0. 先说结论
 
 ```
-用户双击 WFM Studio.app
+用户双击 Uni-Studio.app
         │
         ▼
   Electron 启动
         │
-        ├── 加载 WFM Studio UI（我们魔改后的 workbench）
+        ├── 加载 Uni-Studio UI（我们魔改后的 workbench）
         │   ├── 左侧边栏：文件 · 模板 · 文案库 · 资源市场
-        │   ├── 主编辑区：Markdown / 富文本 / PPT / 海报
+        │   ├── 主编辑区：Markdown / 富文本 / PPT / 海报 / 标书
         │   ├── 右侧面板：Task Flow + AI 对话
         │   └── 去掉了：终端、调试器、源码管理等开发者功能
         │
         └── 自动拉起 Python 后台进程
-            └── FastAPI + CrewAI → localhost:8765
+            └── FastAPI + Agent Gateway → localhost:8765
 ```
 
 用户看到的是**一个全新产品**，不是 VS Code 换了个皮。
@@ -57,11 +62,12 @@ WFM/
 │   │   ├── workbench/                  # ═══ 主战场：workbench 层 ═══
 │   │   │   ├── contrib/                # 所有功能模块都在这里
 │   │   │   │   │
-│   │   │   │   ├── wfm/               # ★★★ 我们的核心代码 ★★★
+│   │   │   │   ├── uni/               # ★★★ 我们的核心代码 ★★★（v0.7: wfm→uni 重命名）
 │   │   │   │   │   ├── taskflow/       #   Task Flow 面板
 │   │   │   │   │   ├── aiChat/         #   AI 对话面板
+│   │   │   │   │   ├── pptEditor/      #   PPT 编辑器（混合方案：PPTist Webview + python-pptx 后端）
+│   │   │   │   │   ├── docGen/         #   标书/方案生成（v0.7 新增）
 │   │   │   │   │   ├── templateHub/    #   模板 & 文案库浏览器
-│   │   │   │   │   ├── pptEditor/      #   PPT 编辑器（Webview）
 │   │   │   │   │   ├── posterEditor/   #   海报编辑器（Webview）
 │   │   │   │   │   ├── diagramEditor/  #   图表编辑器（Webview）
 │   │   │   │   │   ├── agentClient/    #   与 Python 后端通信
@@ -82,13 +88,16 @@ WFM/
 ├── third_party/
 │   └── crewai/                         # 可选：CrewAI 上游（git subtree path 依赖）；未纳入时见 `docs/CREWAI_UPSTREAM.md`
 │
-├── wfm-agents/                         # ═══ 后端：FastAPI + 业务 Agent/Crew ═══
+├── wfm-agents/                         # ═══ 后端：FastAPI + Agent Gateway ═══
 │   ├── pyproject.toml                  # 默认可从 PyPI 依赖 `crewai`；若使用 subtree 再改为 path
 │   ├── config/mcp_servers.yaml         # MCP 定义（可选；见 `wfm_agents/tools/mcp/`）
 │   └── wfm_agents/
 │       ├── server.py                   # FastAPI 入口（`uvicorn wfm_agents.server:app`）
 │       ├── routes/                     # HTTP 路由
-│       └── …                           # gateway / tools / engines 等
+│       ├── gateway/                    # AgentGateway + models + session + stream_events
+│       ├── tools/                      # ToolGateway + builtin + MCP + pptx_provider + proposal_provider（v0.7 新增）
+│       ├── engines/                    # Engine adapters: crewai / anthropic / maf / agenticx
+│       └── observability/              # trace + error codes
 │
 ├── wfm-resources/                      # ═══ 模板 & 文案库 & 素材 ═══
 │   ├── templates/
@@ -265,7 +274,7 @@ npm run compile
 
 ---
 
-## 4. 改造路线图：从 Code OSS → WFM Studio
+## 4. 改造路线图：从 Code OSS → Uni-Studio
 
 ### 4.1 总览
 
@@ -273,21 +282,15 @@ npm run compile
 Phase 0  编译跑通原版 Code OSS
     │    ✅ 已完成（本机环境已就绪，不再重复验证）
     │
-Phase 3-Alpha  ★ 当前阶段：AI 最小闭环（工作区维度）
+Phase 3-Alpha  ✅ 已完成：AI 最小闭环（工作区维度）
     │    ① 打开一个工作区
     │    ② 后端 Agent 被"钉"在该工作区，越界操作被拒
     │    ③ 前端 AI Chat 面板 ↔ 后端 FastAPI（契约见 docs/ARCH_AGENT_GATEWAY.md）
     │        同步 POST /v1/chat 与流式 POST /v1/chat/stream（SSE）均为第一版交付范围
-    │    目标：在 OSS 窗口内发一条消息，后端带工作区上下文返回回复（流式优先）
     │
-Phase 1  品牌换皮（后置）
-    │    改名 + 换图标 + 改欢迎页
-    │    目标：打开看到 "WFM Studio"
-    │
-Phase 2  精简功能（后置，顺手解决 agentHost 告警）
-    │    隐藏终端、调试、Git 等开发者模块
-    │    顺带关闭 VS Code 1.99 内置 AgentHost 子系统（见 §10）
-    │    目标：干净的文案工作台 + 启动日志无红色实例化失败
+Phase 1  品牌换皮 → Uni-Studio（feat/uni-studio-brand 分支）
+    │    改名 + 换图标 + 改欢迎页 + 中文化 + 裁剪工作台
+    │    目标：打开看到 "Uni-Studio"，中文界面
     │
 Phase 4  Task Flow 面板
     │    右侧辅助栏 → Task Flow + AI Chat
@@ -298,86 +301,69 @@ Phase 5  模板 & 文案库
     │    左侧边栏新增：模板浏览器、文案库、资源市场
     │    目标：可选模板开始写作
     │
-Phase 6  PPT / 海报 / 图表编辑器
-         主编辑区 Webview 承载
-         目标：在 IDE 内编辑 PPT
+Phase 6  PPT 编辑器（混合方案，feat/ppt-editor 分支）
+    │    整体模式：AI → python-pptx 生成完整 PPTX
+    │    精细模式：PPTist Webview 所见即所得编辑
+    │    双向转换：PPTX ↔ PPTist JSON（详见 docs/ARCH_PPT_EDITOR.md）
+    │
+Phase 7  标书/方案生成（feat/doc-generation 分支）
+    │    多步 AI 工作流：需求 → 大纲 → 分章节 → 评审 → 格式化
+    │    详细架构见 docs/ARCH_DOC_GENERATION.md
+    │
+Phase 8  后端框架对比评估（feat/backend-eval 分支）
+    │    对比已有代码的 4 引擎：CrewAI / Anthropic / MAF / AgenticX
+    │    5 个场景任务 × 评估维度 → 选定主引擎
+    │    详见 docs/EVAL_REPORT.md（评估完成后产出）
 ```
 
 > 调整说明：原 Phase 1/2 做完 UI 不意味着"能干活"，只是"看起来像"。把 Phase 3-Alpha 前置，可以最早拿到"一条可用的 AI 链路"，后续所有功能都挂在这条链路上演进。
 
-### 4.2 Phase 1 — 品牌换皮 (半天)
+### 4.2 Phase 1 — 品牌换皮 → Uni-Studio（feat/uni-studio-brand 分支）
 
-只改几个文件，就能让 Code OSS 变成 WFM Studio：
+> Phase 1 和 Phase 2（裁剪）合并到 `feat/uni-studio-brand` 分支并行推进。
 
-**① `product.json` — 改产品名称**
+**① `product.json` — 改产品名称为 Uni-Studio**
 
 ```json
 {
-  "nameShort": "WFM Studio",
-  "nameLong": "WFM Studio - Writing Factory & Media",
-  "applicationName": "wfm-studio",
-  "dataFolderName": ".wfm-studio",
-  "urlProtocol": "wfm-studio",
-  "win32MutexName": "wfmstudio",
-  "licenseName": "MIT",
-  "welcomePage": "wfm://welcome"
+  "nameShort": "Uni-Studio",
+  "nameLong": "Uni-Studio",
+  "applicationName": "uni-studio",
+  "dataFolderName": ".uni-studio",
+  "urlProtocol": "uni-studio",
+  "win32MutexName": "unistudio",
+  "darwinBundleIdentifier": "com.uni-studio",
+  "linuxIconName": "uni-studio"
 }
 ```
 
-**② `resources/` — 换图标**
+**② 模块重命名 `wfm/` → `uni/`**（符合 fork policy：新代码放新目录）
 
-```
-resources/
-├── darwin/
-│   └── wfm-studio.icns         # macOS 图标
-├── win32/
-│   └── wfm-studio.ico          # Windows 图标
-└── linux/
-    └── wfm-studio.png          # Linux 图标
-```
+- 目录 `contrib/wfm/` → `contrib/uni/`
+- 文件名、接口名、CSS class 全部从 `wfm` → `uni`
+- `IWfmAgentClientService` → `IUniAgentClientService`
+- localize key 从 `wfm.*` → `uni.*`
+- 详细改动清单见 `docs/UPSTREAM_PATCHES.md`
 
-**③ 标题栏文字** — 文件：`src/vs/workbench/browser/parts/titlebar/`
+**③ `resources/` — 换图标（同路径同名，符合 fork policy 规则 #4）**
 
-**验证：** 重新编译后启动，标题栏显示 "WFM Studio"
+**④ 中文化**
+- 现有 `localize()` 已使用中文默认字符串（如 "未连接"、"发送"、"助手"），保持此模式
+- 核心工作台 UI 中文化：不修改上游 localize 调用，设默认 locale 为 `zh-cn`
+- 除大标题外尽量使用中文
 
-### 4.3 Phase 2 — 精简功能 (1-2 天)
+**⑤ 裁剪工作台（原 Phase 2 合入）**
+- 注释掉 terminal/debug/scm/testing 的 contribution import
+- 关闭内置 AgentHost 子系统
+- 登记所有改动入 `docs/UPSTREAM_PATCHES.md`
 
-Code OSS 的模块注册在 `workbench.common.main.ts` 和各模块的 `*.contribution.ts` 中。
+**验证：** 重新编译后启动，标题栏显示 "Uni-Studio"，中文界面，无终端/调试/源码管理图标
 
-**要隐藏的模块：**
+### 4.3 Phase 2 — 已合并到 Phase 1
 
-| 模块 | 路径 | 操作 |
-|------|------|------|
-| 终端 (Terminal) | `contrib/terminal/` | 注释掉 contribution 注册 |
-| 调试 (Debug) | `contrib/debug/` | 注释掉 contribution 注册 |
-| 源码管理 (Git) | `contrib/scm/` | 注释掉 contribution 注册 |
-| 测试 (Testing) | `contrib/testing/` | 注释掉 contribution 注册 |
-| 远程开发 | `contrib/remote/` | 注释掉 contribution 注册 |
-| 扩展市场 | `contrib/extensions/` | 简化或隐藏 |
+> Phase 2（精简功能）的工作已合并到 `feat/uni-studio-brand` 分支，与品牌换皮一起推进。详见 §4.2。
 
-**要保留的模块：**
-
-| 模块 | 原因 |
-|------|------|
-| 文件浏览器 (Files) | 核心功能 |
-| 搜索 (Search) | 文案搜索 |
-| 编辑器 (Editor) | 核心功能 |
-| 主题 (Themes) | 换肤 |
-| 文件类型关联 | 识别 .md / .ppt.html 等 |
-
-**怎么隐藏：**
-
-找到 `src/vs/workbench/workbench.common.main.ts`，这个文件 import 了所有 contribution：
-
-```typescript
-// 注释掉不需要的模块
-// import 'vs/workbench/contrib/terminal/browser/terminal.contribution';
-// import 'vs/workbench/contrib/debug/browser/debug.contribution';
-// import 'vs/workbench/contrib/scm/browser/scm.contribution';
-// import 'vs/workbench/contrib/testing/browser/testing.contribution';
-```
-
-**验证：** 启动后左侧图标栏只剩文件浏览器和搜索
+原 Phase 2 要隐藏的模块（terminal/debug/scm/testing）和要关闭的 AgentHost 告警，全部在 Phase 1 的裁剪步骤中完成。
 
 ### 4.4 Phase 3 — AI 对话面板 (1-2 周)
 
@@ -472,22 +458,56 @@ Activity Bar (最左侧图标栏)
 
 每个入口对应一个 ViewContainer + 多个 TreeView / Webview。
 
-### 4.7 Phase 6 — PPT / 海报 / 图表编辑器 (2-4 周)
+### 4.7 Phase 6 — PPT 编辑器（混合方案，feat/ppt-editor 分支）
 
-为新文件类型注册自定义编辑器（Custom Editor API）：
+> 详细架构见 `docs/ARCH_PPT_EDITOR.md`
 
-```typescript
-// 当用户打开 .ppt.html 文件时，用 PPT 编辑器打开
-registerEditorSerializer('wfm.pptEditor', {
-    canSerialize: (editor) => editor.resource.path.endsWith('.ppt.html'),
-    // 在 Webview 中加载 PPTist
-});
+PPT 编辑采用 VS Code **CustomEditor API** + Webview 方案，整体生成与精细编辑走不同路径：
+
+**整体模式（AI 一键生成）**：
+- 用户在 chat pane 输入 prompt → 后端调用 `uni.pptx_write` 工具生成完整 PPTX → 前端自动在 CustomEditor 打开
+- 后端用 python-pptx 创建 PPTX
+
+**精细模式（所见即所得编辑）**：
+- 用户双击 `.pptx` 文件 → CustomEditor 注册激活 → Webview 加载 **PPTist**（Vue 开源 PPT 编辑器）
+- PPTist 提供完整交互：幻灯片列表、拖拽排版、文本编辑、动画设置、主题切换
+- 保存时 PPTist JSON → 通过 `uni.pptist_to_pptx` 工具转写为 PPTX
+- 打开时 PPTX → 通过 `uni.pptx_to_pptist` 工具 → 转换为 PPTist JSON 格式
+
+**双向格式转换层**：python-pptx 作为 PPTist ↔ PPTX 的桥梁。
+
+### 4.8 Phase 7 — 标书/方案生成（feat/doc-generation 分支）
+
+> 详细架构见 `docs/ARCH_DOC_GENERATION.md`
+
+标书生成是多步 AI 工作流：
+
+```
+需求输入 → 生成大纲 → 分章节撰写 → 评审 → 格式化输出
 ```
 
-每种编辑器都是一个 Webview，内嵌对应的开源方案：
-- PPT → PPTist
-- 海报 → Fabric.js 编辑器
-- 图表 → Draw.io / Excalidraw
+- 后端提供 `uni.proposal_outline` / `uni.proposal_write_section` / `uni.proposal_review` / `uni.proposal_format` 四个 ToolProvider 工具
+- 前端注册 `docGen` ViewPane 在 AuxiliaryBar（AI Chat 下方）
+- 引擎选择取决于 Phase 8 eval 结果（硬依赖）
+
+### 4.9 Phase 8 — 后端框架对比评估（feat/backend-eval 分支）
+
+> 详细评估场景与维度见 `docs/EVAL_REPORT.md`（评估完成后产出）
+
+对比已拉取代码的 4 个引擎：
+
+| 引擎 | 当前集成深度 | 代码位置 |
+|------|------------|----------|
+| CrewAI | 浅——直接用 `crewai_runtime.py`，**不经过 ToolHandle** | `third_party/agents/crewai/` |
+| Anthropic | **深——完整 ToolHandle 多轮 tool-use loop** | `third_party/anthropics/anthropic-sdk-python/` |
+| MAF | 最浅——DevUI HTTP proxy | `third_party/agents/maf/` |
+| AgenticX | 最浅——DevUI HTTP proxy | `third_party/agents/agenticx/` |
+
+5 个评估场景：基础对话 / 文件读取 / PPT 大纲 / 标书完整生成 / 错误恢复
+
+关键评估维度：ToolHandle 集成深度、流式粒度、多步编排能力、可定制性
+
+**产出**：选定主引擎 + 备选引擎，记录于 `docs/EVAL_REPORT.md`
 
 ---
 
@@ -575,30 +595,70 @@ cd /Users/lc/Desktop/WFM/wfm-ide
 Step 1  基线固化 ───────────────────────────── ✅ 已完成
         本机 wfm-ide 可经 ./scripts/code.sh 启动，环境就绪
 
-Step 2  ★ AI 最小闭环（Phase 3-Alpha，进行中）
+Step 2  AI 最小闭环（Phase 3-Alpha）────────── ✅ 已完成
         A  wfm-agents FastAPI 骨架 + workspace 越界校验   ✅ 已完成
         B  wfm-ide 最小 contrib（agentClient + aiChat）   ✅ 已完成
-        C  手动双进程拉起                                   ✅ 命令见 §8.3 Step C（与仓库一致）
-        D  端到端验收                                       ✅ 见 §8.3 Step D；自动化基线 `cd wfm-agents && uv run pytest`
+        C  手动双进程拉起                                   ✅ 已完成
+        D  端到端验收                                       ✅ 已完成
 
-Step 3  品牌换皮 (Phase 1) ──────────────────── 2-4 小时
-        ├── 改 product.json（名称/协议/数据目录）
-        ├── 换图标和欢迎页文案
-        └── 验证: 标题栏和启动页显示 WFM Studio
+Step 3  品牌 + 裁剪 → Uni-Studio（feat/uni-studio-brand 分支）── 🔄 即将开始
+        ├── B1: 改 product.json → Uni-Studio
+        ├── B2: 换图标
+        ├── B3: 模块重命名 wfm → uni
+        ├── B4: 裁剪工作台（注释 terminal/debug/scm/testing）
+        ├── B5: 默认布局调整（AuxiliaryBar 默认可见）
+        ├── B6: 中文化（设默认 locale zh-cn）
+        ├── B7: Welcome 页面
+        └── 验证: 标题栏显示 "Uni-Studio"，中文界面
 
-Step 4  精简工作台 (Phase 2) ───────────────── 1-2 天
-        ├── 隐藏 terminal/debug/scm/testing 等入口
-        ├── 顺手关闭内置 AgentHost（terminal.contribution.ts:69）
-        ├── 保留 files/search/editor 主流程
-        └── 验证: 工作台聚焦文案生产场景 + 启动日志无红错
+Step 4  PPT 编辑器（feat/ppt-editor 分支）────── 🔄 即将开始
+        ├── P1: 后端 PPTX ToolProvider
+        ├── P2: 后端 PPTX HTTP 路由
+        ├── P3: 前端 CustomEditor 注册
+        ├── P4: PPTist Webview 嵌入 + 双向转换
+        ├── P5: PPT 生成 recipe
+        └── 验证: 双击 .pptx → PPTist 编辑器打开 + AI 整体生成
 
-Step 5  Task Flow 最小版 (Phase 4-Alpha) ───── 3-5 天
-        ├── 3-5 个固定任务节点 + 状态流转
-        ├── WebSocket 状态推送
-        └── 验证: 可视化执行流程 + 基本控制操作
+Step 5  标书/方案生成（feat/doc-generation 分支）── 🔄 即将开始
+        ├── D1: 后端 Proposal ToolProvider
+        ├── D2: 后端 Proposal HTTP 路由
+        ├── D3: 前端文档生成 UI
+        ├── D4: Proposal recipe 引擎集成（硬依赖：需等 Step 6 选出引擎）
+        └── 验证: 输入需求 → 多步执行 → 输出文档
+
+Step 6  后端框架评估（feat/backend-eval 分支）── 🔄 即将开始
+        ├── E1: Eval harness 基础设施
+        ├── E2: CrewAI 深度改造探索
+        ├── E3: MAF/AgenticX 深度改造探索
+        ├── E4: Anthropic 引擎流式增强
+        ├── E5: 运行 eval → 输出 EVAL_REPORT.md → 选定主引擎
+        └── 验证: Eval report 已产出 → 主引擎已选定
 ```
 
-### 8.2 Agent 网关里程碑（`docs/DEV_AGENT_GATEWAY.md` M0→M6）
+### 8.2 并行分支策略
+
+> 详见 `docs/MERGE_STRATEGY.md`
+
+4 条并行分支从 main 拉出，各在各的窗口 checkout：
+
+| 分支 | 职责 | 合并顺序 |
+|------|------|----------|
+| `feat/backend-eval` | 框架对比 + Eval harness | 第 1（纯后端测试，最低风险） |
+| `feat/doc-generation` | 标书/方案生成 | 第 2（依赖 eval 选出的引擎） |
+| `feat/ppt-editor` | PPT 编辑器混合方案 | 第 3（前端 webview + 后端工具） |
+| `feat/uni-studio-brand` | 品牌重命名 + 中文化 + 裁剪 | 第 4（面最广，最后覆盖） |
+
+```bash
+# 创建分支
+git checkout -b feat/backend-eval main
+git checkout -b feat/uni-studio-brand main
+git checkout -b feat/ppt-editor main
+git checkout -b feat/doc-generation main
+```
+
+合并顺序：backend-eval → doc-generation → ppt-editor → uni-studio-brand
+
+### 8.3 Agent 网关里程碑（`docs/DEV_AGENT_GATEWAY.md` M0→M6）
 
 与 `docs/ARCH_AGENT_GATEWAY.md` 契约对齐的实现进度（在此勾选，避免与 Step 2 子项混淆）：
 
@@ -607,10 +667,10 @@ Step 5  Task Flow 最小版 (Phase 4-Alpha) ───── 3-5 天
 - [x] **M2** `AgentGateway` + `CrewAIEngine`（同步 `/v1/chat` 走新链路，`trace_id` / `engine` 透传）
 - [x] **M3** 流式 SSE `POST /v1/chat/stream`（`ToolExecutor` 可选 `event_sink` + 断连 `cancel_event`）
 - [x] **M4** MCP 聚合 + reload（`wfm_agents/config/mcp_servers.yaml`、`mcp.*`、`POST /v1/admin/mcp/reload`；pytest `tests/test_mcp_m4.py`）
-- [x] **M5** `agenticx` in-tree 最小 `run_turn`/`stream_turn`（`[agenticx]` extra 空占位）；`maf` 仍为 `ENGINE_NOT_INSTALLED`
-- [ ] **M6** Eval harness
+- [x] **M5** `agenticx` in-tree 最小 `run_turn`/`stream_turn`；`maf` DevUI 适配
+- [ ] **M6** Eval harness（🔄 in-progress，`feat/backend-eval` 分支）
 
-### 8.3 Step 2 —— 最小闭环详细拆解
+### 8.4 Step 2 —— 最小闭环详细拆解（✅ 已完成，保留供参考）
 
 目标：**打开某个文件夹 → 在右侧 AI 面板发消息 → 后端带工作区上下文返回回复，且后端无法越界写磁盘。**
 
@@ -695,7 +755,8 @@ wfm-ide/src/vs/workbench/contrib/wfm/
 cd /Users/lc/Desktop/WFM/wfm-agents
 uv run uvicorn wfm_agents.server:app --reload --host 127.0.0.1 --port 8765
 
-# 或仓库根：./scripts/dev.sh --no-ide
+# 或仓库根一键（最小闭环，不启 DevUI）：./scripts/dev-minimal.sh
+# 或仓库根：./scripts/dev.sh --no-agent-devuis
 ```
 
 另：仓库根 `scripts/dev.sh` 会同步运行 `wfm-ide` 的 `npm run watch` 与 OSS `./scripts/code.sh`（与上两条等价，供一键开发）。

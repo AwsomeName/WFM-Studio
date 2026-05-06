@@ -1,7 +1,7 @@
-# WFM 统一 Agent 网关 — 架构规格
+# Uni-Studio 统一 Agent 网关 — 架构规格
 
 > **状态**：正式规格（产品/实现单一事实来源）  
-> **更新日期**：2026-04-22  
+> **更新日期**：2026-05-07（品牌更名为 Uni-Studio；加 PPTX/Proposal 工具 FQN 与 HTTP 路由）  
 > **替代**：原 `docs/TMP_AGENT_GATEWAY_DESIGN.md`（已删除，避免双源）
 
 本文定义 IDE 与 Python 后端之间的 **HTTP 契约**、**工具与 MCP 聚合层**、**多引擎适配** 以及 **安全与观测**。实现须与此文档对齐；若有偏差，应先修订本文档再改代码。
@@ -12,7 +12,7 @@
 
 ### 1.1 目标
 
-- IDE 只依赖 **一套稳定 HTTP API**；底层编排可在 **CrewAI / Microsoft Agent Framework (MAF) / AgenticX** 之间切换（`engine` / `engine_id`）。
+- IDE 只依赖 **一套稳定 HTTP API**；底层编排可在 **CrewAI / Microsoft Agent Framework (MAF) / AgenticX / Anthropic Messages（`engine=anthropic`）** 之间切换（`engine` / `engine_id`）。
 - 所有工具调用（内置能力 + MCP）经 **同一 Tool Gateway**：命名空间、策略、审计、超时、工作区约束一致。
 - **第一版必须同时提供**：同步对话接口与 **流式对话接口**（见 §4），以满足 IDE 实时 UI 与可观测性需求。
 - 支持后续 A/B 与评测：同一请求 fixture，切换引擎对比延迟、工具成功率、任务完成度。
@@ -82,7 +82,8 @@ HTTP  /v1/chat | /v1/chat/stream
 
 **FQN 约定**
 
-- 内置：`wfm.*`（例如 `wfm.workspace_read`、`wfm.workspace_write`）。
+- 内置：`uni.*`（例如 `uni.workspace_read`、`uni.workspace_write`、`uni.pptx_read`、`uni.pptx_write`、`uni.pptx_slide_edit`、`uni.pptx_render_slide`、`uni.pptx_to_pptist`、`uni.pptist_to_pptx`、`uni.proposal_outline`、`uni.proposal_write_section`、`uni.proposal_review`、`uni.proposal_format`）。
+  > 注：原有 `wfm.*` FQN（`wfm.workspace_read`、`wfm.workspace_write`）在品牌更名后迁移为 `uni.*`，过渡期可同时注册两套 FQN指向同一实现。
 - MCP：`mcp.{server_id}.{original_tool_name}`，`server_id` 限 `[a-z0-9_-]`。
 
 ### 3.4 BuiltinToolProvider
@@ -147,7 +148,26 @@ class EngineAdapter(Protocol):
 - **流式 MCP 工具**：v1 工具结果以 **最终结果** 为准；中间 progress 事件可丢弃，须在 release note 标明限制。
 - **取消**：检测到客户端断开连接时，向 `SessionContext.cancel_event` 发出信号；工具与引擎在可中断点退出。
 
-### 4.4 可选：NDJSON
+### 4.5 PPTX HTTP 路由（Phase 6，详见 `docs/ARCH_PPT_EDITOR.md`）
+
+| 路由 | 方法 | 功能 |
+|------|------|------|
+| `/v1/pptx/read` | POST | 读 PPTX 结构 → JSON |
+| `/v1/pptx/write` | POST | 创建/更新 PPTX |
+| `/v1/pptx/convert-to-pptist` | POST | PPTX → PPTist JSON（精细编辑器打开时调用） |
+| `/v1/pptx/convert-from-pptist` | POST | PPTist JSON → PPTX（精细编辑器保存时调用） |
+
+所有 PPTX 路由带 `workspace_root` 参数，安全模型与 §5.1 一致。
+
+### 4.6 Proposal HTTP 路由（Phase 7，详见 `docs/ARCH_DOC_GENERATION.md`）
+
+| 路由 | 方法 | 功能 |
+|------|------|------|
+| `/v1/proposal/generate` | POST | 启动标书生成（recipe_id: `uni.proposal_generate`） |
+| `/v1/proposal/refine` | POST | 精细调整指定章节 |
+| `/v1/proposal/status` | POST | 查询生成进度 |
+
+所有 Proposal 路由带 `workspace_root` 参数，安全模型与 §5.1 一致。
 
 若实现需简化代理层，允许 **`Content-Type: application/x-ndjson`** 作为同等契约的备选，**事件 JSON 与 SSE `data` 载荷相同**。产品侧以 **SSE 为默认**；文档与 OpenAPI 以 SSE 为准。
 
@@ -317,7 +337,7 @@ class EngineAdapter(Protocol):
 
 ## 12. 可选依赖与错误语义
 
-- `maf` / `agenticx` 使用 **optional-dependencies**；未安装且请求对应引擎时返回 **`ENGINE_NOT_INSTALLED`**，消息体可含安装提示（如 `pip install wfm-agents[maf]`）。
+- `maf` / `agenticx` / **`anthropic`** 使用 **optional-dependencies**；未安装且请求对应引擎时返回 **`ENGINE_NOT_INSTALLED`**，消息体可含安装提示（如 `pip install wfm-agents[maf]`、`pip install wfm-agents[anthropic]`）。
 
 ---
 
@@ -344,6 +364,7 @@ wfm_agents/
     crewai_engine.py
     maf_engine.py
     agenticx_engine.py
+    anthropic_engine.py
   fs_ops.py
 ```
 
@@ -363,13 +384,13 @@ wfm_agents/
 
 切换引擎时能力不必一致；以下用于预期管理（实现后应更新勾选）。
 
-| 能力 | CrewAI | MAF | AgenticX |
-|------|--------|-----|----------|
-| 编排 DSL | Crew/Process 等 | Graph 等 | 依框架 |
-| 同步 `/v1/chat` | 目标支持 | 目标支持 | 目标支持 |
-| 流式 `/v1/chat/stream` | **v1 必须** | **v1 必须** | **v1 必须** |
-| `recipe_id` | 引擎内定义 | 引擎内定义 | 引擎内定义 |
-| 跨轮记忆 | 调用方传入 | 调用方传入 | 调用方传入 |
+| 能力 | CrewAI | MAF | AgenticX | Anthropic (`anthropic-sdk-python`) |
+|------|--------|-----|----------|-----------------------------------|
+| 编排 DSL | Crew/Process 等 | Graph 等 | 依框架 | 网关内 Messages + tool 循环（非 Crew/Graph） |
+| 同步 `/v1/chat` | 目标支持 | 目标支持 | 目标支持 | 目标支持 |
+| 流式 `/v1/chat/stream` | **v1 必须** | **v1 必须** | **v1 必须** | **v1 必须**（首版：整段文本 delta，与 DevUI 引擎同级） |
+| `recipe_id` | 引擎内定义 | 引擎内定义 | 引擎内定义 | 引擎内定义（注入用户消息前缀） |
+| 跨轮记忆 | 调用方传入 | 调用方传入 | 调用方传入 | 调用方传入 |
 
 ---
 

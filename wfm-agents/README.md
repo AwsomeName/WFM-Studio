@@ -18,7 +18,7 @@ uv run uvicorn wfm_agents.server:app --reload --host 127.0.0.1 --port 8765
 
 仅需在生产环境启用 `engine=anthropic` 且希望**减小镜像**时，可单独安装 `wfm-agents[anthropic]`（不把 `anthropic` 带进默认主依赖）。开发者运行 `uv sync --extra dev` 时已包含 `anthropic`，便于 `pytest`。
 
-仓库根亦可用：`./scripts/dev.sh`（默认后台起上述 uvicorn + IDE watch，日志在 `.wfm-dev/logs/`）。
+仓库根亦可用：`./scripts/dev.sh`（默认含 DevUI）或 **`./scripts/dev-minimal.sh`（最小闭环，见 docs/PLAN §8.3）**；先停再起：`./scripts/wfm-up.sh`。日志在 `.wfm-dev/logs/`。
 
 ## 接口
 

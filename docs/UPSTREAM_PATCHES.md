@@ -1,8 +1,8 @@
 # UPSTREAM_PATCHES — vscode 源码侵入式改动对账单
 
-> 本文件记录所有对 `wfm-ide/` 下 **vscode 原有文件** 的修改。  
-> **每次升级 vscode 前打开本文件；升级中如有冲突，一定出现在这里登记过的文件里。**  
-> 新增的 WFM 自有代码（`contrib/wfm/**`、新资源文件）不需要登记。
+> 本文件记录所有对 `wfm-ide/` 下 **vscode 原有文件** 的修改。
+> **每次升级 vscode 前打开本文件；升级中如有冲突，一定出现在这里登记过的文件里。**
+> 新增的 Uni-Studio 自有代码（`contrib/uni/**`、新资源文件）不需要登记。
 
 ---
 
@@ -27,7 +27,7 @@
 
 - 改动类型：修改（Content-Security-Policy `connect-src`）
 - 改动摘要：在 `connect-src` 中增加 `http://127.0.0.1:*`、`http://localhost:*` 及对应 `ws://` 源
-- 目的：Workbench 渲染层通过 `fetch` 调用 `IRequestService` 时受 HTML CSP 约束；WFM 自建 Agent 后端默认 `http://127.0.0.1:8765`，不放宽则请求被拦截并报 `Failed to fetch`
+- 目的：Workbench 渲染层通过 `fetch` 调用 `IRequestService` 时受 HTML CSP 约束；Uni-Studio Agent 后端默认 `http://127.0.0.1:8765`，不放宽则请求被拦截并报 `Failed to fetch`
 - 升级检查：若上游调整 CSP 结构，把上述四项合并进新的 `connect-src` 列表
 
 ### wfm-ide/src/vs/code/electron-browser/workbench/workbench-dev.html
@@ -40,7 +40,7 @@
 ### wfm-ide/product.json
 
 - 改动类型：字段值修改
-- 改动摘要：品牌字段替换为 WFM Studio
+- 改动摘要：品牌字段替换为 Uni-Studio（`nameShort`/`nameLong`/`applicationName`/`dataFolderName`/`urlProtocol`/`win32MutexName`/`darwinBundleIdentifier`/`linuxIconName`）；删除 `defaultChatAgent` 中 Copilot 引用
 - 目的：品牌化
 - 升级检查：对比上游新增字段（遥测、更新源、AI 配置等），保留我们定制的字段值
 
@@ -48,15 +48,30 @@
 
 - 改动类型：注释 import + 新增 import
 - 改动摘要：
-  - 注释（精简工作台）：terminal / debug / scm / testing 的 contribution
-  - 新增（WFM 模块）：contrib/wfm/aiChat 等
-- 目的：裁剪不需要的开发者模块 + 挂载 WFM 自己的模块
+  - 注释（精简工作台）：terminal / debug / scm / testing 的 contribution import
+  - 新增（Uni-Studio 模块）：`contrib/uni/browser/uni.contribution.js`
+  - 后续新增：`contrib/uni/pptEditor/browser/pptEditor.contribution.js`、`contrib/uni/docGen/browser/docGen.contribution.js`
+- 目的：裁剪不需要的开发者模块 + 挂载 Uni-Studio 自己的模块
 - 升级检查：确认注释和新增都还在；若上游重命名/删除我们依赖的模块路径，需调整
+
+### wfm-ide/src/vs/workbench/browser/workbench.contribution.ts
+
+- 改动类型：修改默认配置值
+- 改动摘要：`workbench.secondarySideBar.defaultVisibility` 从 `'visibleInWorkspace'` 改为 `'visible'`
+- 目的：让 AI 对话面板默认可见（不需要先打开工作区）
+- 升级检查：若上游重命名此配置键，跟着改
+
+### wfm-ide/src/vs/workbench/contrib/terminal/browser/terminal.contribution.ts
+
+- 改动类型：注释 registration
+- 改动摘要：注释 `AgentHostTerminalContribution` 注册（line ~69）
+- 目的：关闭 VS Code 内置 AgentHost 子系统告警（与本项目的 Agent 无关）
+- 升级检查：确认注释还在；若上游重构此注册方式，需重新定位
 
 ### wfm-ide/resources/darwin/code.icns
 
 - 改动类型：二进制替换
-- 改动摘要：替换为 WFM Studio icon
+- 改动摘要：替换为 Uni-Studio icon
 - 目的：品牌化
 - 升级检查：上游若重命名该文件，跟着改名
 
@@ -74,5 +89,6 @@
 
 ## 变更日志（每次修改或升级时追加一条）
 
-- 2026-04-20 放宽 workbench HTML CSP `connect-src`，允许 WFM Agent 本地 HTTP/WS（`workbench.html` / `workbench-dev.html`）
+- 2026-05-07 更新为 Uni-Studio 品牌；新增 AuxiliaryBar 默认可见、AgentHost 注释条目；产品名从 WFM Studio → Uni-Studio
+- 2026-04-20 放宽 workbench HTML CSP `connect-src`，允许 Agent 本地 HTTP/WS（`workbench.html` / `workbench-dev.html`）
 - 2026-04-18 初始化本文件（Monorepo 整合完成，尚无具体定制）
