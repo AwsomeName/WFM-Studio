@@ -39,7 +39,7 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 	async chat(message: string, token: CancellationToken = CancellationToken.None): Promise<IWfmAgentChatReply> {
 		const workspaceRoot = this.getWorkspaceRoot();
 		if (!workspaceRoot) {
-			throw new Error('WFM: 请先打开一个文件夹作为工作区（File → Open Folder）。');
+			throw new Error('WFM Studio: 请先打开一个文件夹作为工作区（File → Open Folder）。');
 		}
 
 		const body = JSON.stringify({ workspace_root: workspaceRoot, message });
@@ -57,12 +57,12 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 		if (status < 200 || status >= 300) {
 			const text = await asJson<{ detail?: string }>(context).catch(() => null);
 			const detail = text?.detail ?? `HTTP ${status}`;
-			throw new Error(`WFM 后端错误: ${detail}`);
+			throw new Error(`WFM Studio 后端错误: ${detail}`);
 		}
 
 		const raw = await asJson<IRawChatReply>(context);
 		if (!raw) {
-			throw new Error('WFM 后端返回为空');
+			throw new Error('WFM Studio 后端返回为空');
 		}
 
 		return {

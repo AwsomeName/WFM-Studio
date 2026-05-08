@@ -13,6 +13,7 @@ import { app, protocol, crashReporter, Menu, contentTracing } from 'electron';
 import minimist from 'minimist';
 import { product } from './bootstrap-meta.js';
 import { parse } from './vs/base/common/jsonc.js';
+import { applyEdits, setProperty } from './vs/base/common/jsonEdit.js';
 import { getUserDataPath } from './vs/platform/environment/node/userDataPath.js';
 import * as perf from './vs/base/common/performance.js';
 import { resolveNLSConfiguration } from './vs/base/node/nls.js';
@@ -381,12 +382,32 @@ function readArgvConfigSync(): IArgvConfig {
 
 	// Read or create the argv.json config file sync before app('ready')
 	const argvConfigPath = getArgvConfigPath();
+	const defaultLocaleZhCn = 'zh-cn';
 	let argvConfig: IArgvConfig | undefined = undefined;
 	try {
-		argvConfig = parse(fs.readFileSync(argvConfigPath).toString());
+		const argvRaw = fs.readFileSync(argvConfigPath).toString();
+		argvConfig = parse<IArgvConfig>(argvRaw) || {};
+		const needsDefaultLocale =
+			typeof argvConfig.locale !== 'string' ||
+			argvConfig.locale.trim() === '';
+		if (needsDefaultLocale) {
+			try {
+				const edits = setProperty(argvRaw, ['locale'], defaultLocaleZhCn, { tabSize: 4, insertSpaces: false, eol: '\n' });
+				fs.writeFileSync(argvConfigPath, applyEdits(argvRaw, edits));
+				argvConfig = parse(fs.readFileSync(argvConfigPath).toString());
+			} catch (mergeError) {
+				console.warn(`Unable to merge default locale into argv.json (${mergeError}); using in-memory fallback`);
+				argvConfig = { ...argvConfig, locale: defaultLocaleZhCn };
+			}
+		}
 	} catch (error) {
 		if (error && error.code === 'ENOENT') {
 			createDefaultArgvConfigSync(argvConfigPath);
+			try {
+				argvConfig = parse(fs.readFileSync(argvConfigPath).toString());
+			} catch {
+				argvConfig = { locale: defaultLocaleZhCn };
+			}
 		} else {
 			console.warn(`Unable to read argv.json configuration file in ${argvConfigPath}, falling back to defaults (${error})`);
 		}
@@ -419,6 +440,8 @@ function createDefaultArgvConfigSync(argvConfigPath: string): void {
 			'//',
 			'// NOTE: Changing this file requires a restart of VS Code.',
 			'{',
+			'	// WFM Studio: default UI language when argv.json is first created.',
+			'	"locale": "zh-cn",',
 			'	// Use software rendering instead of hardware accelerated rendering.',
 			'	// This can help in cases where you see rendering issues in VS Code.',
 			'	// "disable-hardware-acceleration": true',

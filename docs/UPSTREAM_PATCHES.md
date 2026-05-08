@@ -40,9 +40,23 @@
 ### wfm-ide/product.json
 
 - 改动类型：字段值修改
-- 改动摘要：品牌字段替换为 Uni-Studio（`nameShort`/`nameLong`/`applicationName`/`dataFolderName`/`urlProtocol`/`win32MutexName`/`darwinBundleIdentifier`/`linuxIconName`）；删除 `defaultChatAgent` 中 Copilot 引用
-- 目的：品牌化
-- 升级检查：对比上游新增字段（遥测、更新源、AI 配置等），保留我们定制的字段值
+- 改动摘要：品牌字段替换为 Uni-Studio（`nameShort`/`nameLong`/`applicationName`/`dataFolderName`/`urlProtocol`/`win32MutexName`/`darwinBundleIdentifier`/`linuxIconName`）；删除 `defaultChatAgent` 中 Copilot 引用；增加 `extensionsGallery.serviceUrl`（便于 `builtInExtensions` 从 Marketplace 拉取 VSIX）；在 `builtInExtensions` 中内置 `MS-CEINTL.vscode-language-pack-zh-hans`（与当前 `package.json` 的 VS Code 次版本线兼容的 1.110.x 语言包 + `sha256` 为 **fetch 解压后** 正文的校验和）
+- 目的：品牌化 + 发行版附带简体中文语言包资源
+- 升级检查：对比上游新增字段（遥测、更新源、AI 配置等），保留我们定制的字段值；`subtree pull` 后核对 `builtInExtensions`/`extensionsGallery` 是否需随上游合并
+
+### wfm-ide/src/main.ts
+
+- 改动类型：修改 + 新增 import
+- 改动摘要：`createDefaultArgvConfigSync` 默认模板含 `"locale": "zh-cn"`；`readArgvConfigSync` 在**已存在** `argv.json` 但缺少/空 `locale` 时用 `jsonEdit.setProperty` **合并写回** `zh-cn`（尽量保留 JSONC）；`ENOENT` 创建默认文件后**立即再读**，避免首轮启动内存里仍为 `{}`；失败时内存回退 `{ locale: 'zh-cn' }`
+- 目的：老用户与环境也能「开箱即简体」声明，不要求手改配置文件
+- 升级检查：`readArgvConfigSync` / `jsonEdit` 若上游重构，保留合并 locale + 首轮再读两条逻辑
+
+### wfm-ide/src/vs/base/node/nls.ts
+
+- 改动类型：修改
+- 改动摘要：**去掉** `VSCODE_DEV` 与 `!commit` 触发的英文短路；在无 `product.commit` 时用固定段 `development` 作为语言包缓存路径子目录
+- 目的：开发启动（`code.sh`）与 OSS 源码无 commit 时仍能解析并应用语言包，配合 `argv`/`zh-cn`
+- 升级检查：`resolveNLSConfiguration` 条件与 `join(..., commitSegment)` 若上游重写，逐项合并；注意缓存目录语义变化（`development` vs 真实 commit）
 
 ### wfm-ide/src/vs/workbench/workbench.common.main.ts
 
@@ -89,6 +103,7 @@
 
 ## 变更日志（每次修改或升级时追加一条）
 
-- 2026-05-07 更新为 Uni-Studio 品牌；新增 AuxiliaryBar 默认可见、AgentHost 注释条目；产品名从 WFM Studio → Uni-Studio
+- 2026-05-07 `main.ts`：`argv.json` 缺省/空 `locale` 时合并写回 `zh-cn`，`ENOENT` 创建后立刻再读；`nls.ts`：dev 与无 `commit` 时仍走语言包（缓存段 `development`）
+- 2026-05-07 `main.ts` 默认 `argv.json` 写入 `locale: zh-cn`；`product.json` 增加 `extensionsGallery` 与简体中文内置语言包条目
 - 2026-04-20 放宽 workbench HTML CSP `connect-src`，允许 Agent 本地 HTTP/WS（`workbench.html` / `workbench-dev.html`）
 - 2026-04-18 初始化本文件（Monorepo 整合完成，尚无具体定制）

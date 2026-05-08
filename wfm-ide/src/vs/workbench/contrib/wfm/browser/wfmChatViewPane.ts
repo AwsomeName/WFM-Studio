@@ -67,14 +67,14 @@ export class WfmChatViewPane extends ViewPane {
 		this.rootEl = dom.append(container, $('.wfm-chat-pane'));
 
 		this.statusEl = dom.append(this.rootEl, $('.wfm-chat-status'));
-		this.statusEl.textContent = localize('wfm.chat.status.idle', "未连接");
+		this.statusEl.textContent = localize('wfm.chat.status.idle', "正在检测后端…");
 		void this.refreshStatus();
 
 		this.messagesEl = dom.append(this.rootEl, $('.wfm-chat-messages'));
 
 		const composer = dom.append(this.rootEl, $('.wfm-chat-composer'));
 		this.inputEl = dom.append(composer, $('textarea.wfm-chat-input')) as HTMLTextAreaElement;
-		this.inputEl.placeholder = localize('wfm.chat.placeholder', "说点什么 (Cmd/Ctrl+Enter 发送)");
+		this.inputEl.placeholder = localize('wfm.chat.placeholder', "描述当前任务… (Cmd/Ctrl+Enter 发送)");
 		this.inputEl.rows = 3;
 
 		const actions = dom.append(composer, $('.wfm-chat-actions'));
@@ -110,13 +110,13 @@ export class WfmChatViewPane extends ViewPane {
 		if (ok) {
 			this.statusEl.textContent = localize(
 				'wfm.chat.status.connected',
-				"已连接 {0}",
+				"WFM Studio 后端已连接 {0}",
 				this.agentClient.baseUrl,
 			);
 		} else {
 			this.statusEl.textContent = localize(
 				'wfm.chat.status.unreachable',
-				"后端未响应 ({0})",
+				"WFM Studio 后端未响应 ({0})",
 				this.agentClient.baseUrl,
 			);
 		}
@@ -203,7 +203,7 @@ export class WfmChatViewPane extends ViewPane {
 			case 'user':
 				return localize('wfm.chat.role.user', "你");
 			case 'assistant':
-				return localize('wfm.chat.role.assistant', "助手");
+				return localize('wfm.chat.role.assistant', "WFM Studio");
 			case 'error':
 				return localize('wfm.chat.role.error', "错误");
 		}

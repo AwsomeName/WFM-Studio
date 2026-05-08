@@ -1,6 +1,6 @@
 {
-	"nameShort": "Code - OSS",
-	"nameLong": "Code - OSS",
+	"nameShort": "WFM Studio",
+	"nameLong": "WFM Studio",
 	"applicationName": "code-oss",
 	"dataFolderName": ".vscode-oss",
 	"win32MutexName": "vscodeoss",
@@ -13,15 +13,15 @@
 	"serverApplicationName": "code-server-oss",
 	"serverDataFolderName": ".vscode-server-oss",
 	"tunnelApplicationName": "code-tunnel-oss",
-	"win32DirName": "Microsoft Code OSS",
-	"win32NameVersion": "Microsoft Code OSS",
+	"win32DirName": "WFM Studio",
+	"win32NameVersion": "WFM Studio",
 	"win32RegValueName": "CodeOSS",
 	"win32x64AppId": "{{D77B7E06-80BA-4137-BCF4-654B95CCEBC5}",
 	"win32arm64AppId": "{{D1ACE434-89C5-48D1-88D3-E2991DF85475}",
 	"win32x64UserAppId": "{{CC6B787D-37A0-49E8-AE24-8559A032BE0C}",
 	"win32arm64UserAppId": "{{3AEBF0C8-F733-4AD4-BADE-FDB816D53D7B}",
 	"win32AppUserModelId": "Microsoft.CodeOSS",
-	"win32ShellNameShort": "C&ode - OSS",
+	"win32ShellNameShort": "W&FM Studio",
 	"win32TunnelServiceMutex": "vscodeoss-tunnelservice",
 	"win32TunnelMutex": "vscodeoss-tunnel",
 	"darwinBundleIdentifier": "com.visualstudio.code.oss",
@@ -33,6 +33,9 @@
 	"nodejsRepository": "https://nodejs.org",
 	"urlProtocol": "code-oss",
 	"webviewContentExternalBaseUrlTemplate": "https://{{uuid}}.vscode-cdn.net/insider/ef65ac1ba57f57f2a3961bfe94aa20481caca4c6/out/vs/workbench/contrib/webview/browser/pre/",
+	"extensionsGallery": {
+		"serviceUrl": "https://marketplace.visualstudio.com/_apis/public/gallery"
+	},
 	"builtInExtensions": [
 		{
 			"name": "ms-vscode.js-debug-companion",
@@ -76,6 +79,21 @@
 				"publisherId": {
 					"publisherId": "5f5636e7-69ed-4afe-b5d6-8d231fb3d3ee",
 					"publisherName": "ms-vscode",
+					"displayName": "Microsoft",
+					"flags": "verified"
+				},
+				"publisherDisplayName": "Microsoft"
+			}
+		},
+		{
+			"name": "MS-CEINTL.vscode-language-pack-zh-hans",
+			"version": "1.110.2026050117",
+			"sha256": "e9a91c95d6a6fb87f9f271fbe3c4eea21af63cde4d6baf6e5ce93a5355b6b744",
+			"metadata": {
+				"id": "e4ee7751-6514-4731-9cdb-7580ffa9e70b",
+				"publisherId": {
+					"publisherId": "0b0882c3-aee3-4d7c-b5f9-872f9be0a115",
+					"publisherName": "MS-CEINTL",
 					"displayName": "Microsoft",
 					"flags": "verified"
 				},

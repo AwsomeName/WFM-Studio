@@ -441,8 +441,16 @@ fi
 if [[ $LAUNCH_IDE -eq 1 ]]; then
 	log "启动 IDE (wfm-ide/scripts/code.sh，日志镜像到 $IDE_LOG)"
 	log "  → 启动后后台进程保持运行；停服务请执行 ./scripts/dev-stop.sh"
+	# Cursor / vscode 调起的 shell 会注入 ELECTRON_RUN_AS_NODE=1 与一组 VSCODE_*；
+	# 它们会让 Electron 二进制变回纯 Node（process.type=undefined），
+	# 触发 out/main.js 的 `import { app, Menu } from 'electron'` 报 named import missing。
+	# 这里清掉再 exec code.sh，保证从 cursor 内置终端跑也能正常拉起。
 	(
 		cd "$IDE_DIR"
+		unset ELECTRON_RUN_AS_NODE VSCODE_CODE_CACHE_PATH \
+			VSCODE_CRASH_REPORTER_PROCESS_TYPE VSCODE_CWD VSCODE_ESM_ENTRYPOINT \
+			VSCODE_HANDLES_UNCAUGHT_ERRORS VSCODE_IPC_HOOK VSCODE_NLS_CONFIG \
+			VSCODE_PID VSCODE_PROCESS_TITLE
 		exec ./scripts/code.sh
 	) 2>&1 | tee "$IDE_LOG" || true
 else

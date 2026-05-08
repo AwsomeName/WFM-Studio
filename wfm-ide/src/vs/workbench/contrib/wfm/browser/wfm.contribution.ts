@@ -23,7 +23,7 @@ const WFM_VIEW_CONTAINER_ID = 'workbench.view.wfm';
 const wfmViewIcon = registerIcon(
 	'wfm-view-icon',
 	Codicon.commentDiscussion,
-	localize('wfmViewIcon', 'Icon for the WFM Studio AI assistant view.'),
+	localize('wfmViewIcon', 'WFM Studio 任务助手侧栏图标'),
 );
 
 registerSingleton(IWfmAgentClientService, WfmAgentClientService, InstantiationType.Delayed);
@@ -31,7 +31,7 @@ registerSingleton(IWfmAgentClientService, WfmAgentClientService, InstantiationTy
 const viewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer(
 	{
 		id: WFM_VIEW_CONTAINER_ID,
-		title: localize2('wfm.viewContainer.title', "WFM 助手"),
+		title: localize2('wfm.viewContainer.title', "WFM Studio"),
 		icon: wfmViewIcon,
 		order: 100,
 		ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [WFM_VIEW_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
@@ -44,7 +44,7 @@ const viewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewCo
 
 const chatViewDescriptor: IViewDescriptor = {
 	id: WfmChatViewPane.ID,
-	name: localize2('wfm.chat.name', "AI 对话"),
+	name: localize2('wfm.chat.name', "任务对话"),
 	containerIcon: wfmViewIcon,
 	ctorDescriptor: new SyncDescriptor(WfmChatViewPane),
 	canToggleVisibility: true,
