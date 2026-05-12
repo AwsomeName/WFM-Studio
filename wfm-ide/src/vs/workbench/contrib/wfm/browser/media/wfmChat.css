@@ -63,12 +63,17 @@
 	letter-spacing: 0.05em;
 }
 
-.wfm-chat-pane .wfm-msg .wfm-msg-ws {
+.wfm-chat-pane .wfm-msg .wfm-msg-ws,
+.wfm-chat-pane .wfm-msg .wfm-msg-origin {
 	font-size: 11px;
 	opacity: 0.75;
 	margin-top: 4px;
 	white-space: pre-wrap;
 	word-break: break-all;
+}
+
+.wfm-chat-pane .wfm-msg .wfm-msg-origin {
+	font-style: italic;
 }
 
 .wfm-chat-pane .wfm-chat-composer {

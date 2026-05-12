@@ -1,0 +1,257 @@
+/*---------------------------------------------------------------------------------------------
+ *  WFM Studio CAD viewer — webview 内样式。
+ *  父级（CadViewerEditor pane）会铺满 webview，所以这里只管 viewer 内部布局。
+ *--------------------------------------------------------------------------------------------*/
+
+html,
+body {
+	margin: 0;
+	padding: 0;
+	width: 100%;
+	height: 100%;
+	overflow: hidden;
+	background: #1e1e1e;
+	color: #cccccc;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+		"Hiragino Sans GB", "Microsoft Yahei UI", sans-serif;
+	font-size: 13px;
+}
+
+body.is-light {
+	background: #ffffff;
+	color: #1f1f1f;
+}
+
+#wfm-cad-toolbar {
+	position: absolute;
+	top: 8px;
+	left: 8px;
+	right: 8px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	z-index: 10;
+	pointer-events: auto;
+}
+
+#wfm-cad-filename {
+	flex: 1 1 auto;
+	font-size: 12px;
+	opacity: 0.85;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	padding: 4px 8px;
+	background: rgba(0, 0, 0, 0.4);
+	border-radius: 4px;
+	max-width: 50%;
+}
+
+body.is-light #wfm-cad-filename {
+	background: rgba(255, 255, 255, 0.7);
+	color: #1f1f1f;
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.wfm-cad-btn {
+	flex: 0 0 auto;
+	padding: 6px 12px;
+	border-radius: 4px;
+	border: 1px solid rgba(255, 255, 255, 0.18);
+	background: rgba(0, 0, 0, 0.55);
+	color: inherit;
+	cursor: pointer;
+	font-size: 12px;
+	line-height: 1.2;
+	transition: background 0.12s ease;
+}
+
+.wfm-cad-btn:hover {
+	background: rgba(0, 0, 0, 0.7);
+}
+
+.wfm-cad-btn:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+body.is-light .wfm-cad-btn {
+	background: rgba(255, 255, 255, 0.85);
+	color: #1f1f1f;
+	border-color: rgba(0, 0, 0, 0.1);
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+body.is-light .wfm-cad-btn:hover {
+	background: rgba(245, 245, 245, 1);
+}
+
+.wfm-cad-btn.primary {
+	background: #0e639c;
+	border-color: #0e639c;
+	color: #ffffff;
+}
+
+.wfm-cad-btn.primary:hover {
+	background: #1177bb;
+}
+
+.wfm-cad-btn.is-active {
+	background: #185a96;
+	border-color: #2980d9;
+	color: #ffffff;
+}
+
+body.is-light .wfm-cad-btn.is-active {
+	background: #d8e8fb;
+	color: #0a3a72;
+	border-color: #5b9be0;
+}
+
+body.wfm-cad-pan-mode #wfm-cad-canvas-host canvas {
+	cursor: grab;
+}
+
+body.wfm-cad-pan-mode #wfm-cad-canvas-host canvas:active {
+	cursor: grabbing;
+}
+
+.codicon-like {
+	font-size: 14px;
+	font-style: normal;
+	display: inline-block;
+}
+
+#wfm-cad-status {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	padding: 12px 24px;
+	background: rgba(0, 0, 0, 0.6);
+	border-radius: 6px;
+	font-size: 12px;
+	white-space: pre-wrap;
+	max-width: 80%;
+	text-align: center;
+}
+
+body.is-light #wfm-cad-status {
+	background: rgba(255, 255, 255, 0.85);
+	color: #1f1f1f;
+	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
+#wfm-cad-status.is-error {
+	background: rgba(180, 35, 35, 0.85);
+	color: #ffffff;
+}
+
+#wfm-cad-canvas-host {
+	position: absolute;
+	inset: 0;
+	overflow: hidden;
+}
+
+#wfm-cad-canvas-host canvas {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+
+#wfm-cad-layer-panel {
+	position: absolute;
+	right: 8px;
+	top: 56px;
+	bottom: 8px;
+	width: 220px;
+	background: rgba(0, 0, 0, 0.7);
+	color: inherit;
+	border-radius: 4px;
+	padding: 8px;
+	overflow-y: auto;
+	font-size: 12px;
+	z-index: 8;
+}
+
+body.is-light #wfm-cad-layer-panel {
+	background: rgba(255, 255, 255, 0.95);
+	color: #1f1f1f;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+#wfm-cad-layer-panel .wfm-cad-layer-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 2px 0;
+}
+
+#wfm-cad-layer-panel .wfm-cad-layer-row label {
+	flex: 1 1 auto;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+#wfm-cad-layer-panel .wfm-cad-layer-count {
+	flex: 0 0 auto;
+	opacity: 0.6;
+	font-size: 11px;
+}
+
+#wfm-cad-error {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	padding: 16px 24px;
+	max-width: 80%;
+	background: rgba(180, 35, 35, 0.9);
+	color: #ffffff;
+	border-radius: 6px;
+	font-size: 12px;
+	line-height: 1.5;
+	white-space: pre-wrap;
+}
+
+#wfm-cad-tip {
+	position: absolute;
+	left: 50%;
+	bottom: 28px;
+	transform: translateX(-50%);
+	padding: 10px 16px;
+	background: rgba(0, 0, 0, 0.75);
+	color: #f3f3f3;
+	border-radius: 6px;
+	font-size: 12px;
+	line-height: 1.6;
+	z-index: 12;
+	max-width: min(80%, 560px);
+	cursor: pointer;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+body.is-light #wfm-cad-tip {
+	background: rgba(255, 255, 255, 0.95);
+	color: #1f1f1f;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+	border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+#wfm-cad-tip .wfm-cad-tip-title {
+	font-weight: 600;
+	margin-bottom: 4px;
+}
+
+#wfm-cad-tip .wfm-cad-tip-close {
+	margin-top: 6px;
+	font-size: 11px;
+	opacity: 0.65;
+}
+
+#wfm-cad-error a {
+	color: #ffffff;
+	text-decoration: underline;
+}

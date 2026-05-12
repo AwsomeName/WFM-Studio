@@ -76,3 +76,41 @@
 1. 故事 1：保持现状，用文案与状态栏强化「已连接 / 未响应」。
 2. 故事 2：扩展 `IWfmAgentClientService.chat` 与设置或下拉，传入 `mode`（优先），再视需要 `engine`。
 3. 故事 3：在故事 2 的基础上增加 `engine` 与 `trace_id` 展示；流式与工具进度可对接 `chat_stream` 另开迭代。
+
+---
+
+## 用户故事 4：CAD 浏览与审图（v0.2 真渲染版，详见 [ARCH_CAD_REVIEW.md](ARCH_CAD_REVIEW.md)）
+
+**作为**审图工程师，**我要**把 .dwg 或 .dxf 放进工作目录后双击就能看到接近 AutoCAD 的可交互视图（pan/zoom/选实体/切图层），再点工具栏「AI 审图」或在右侧任务对话里发指令拿审图意见，**以便**完整覆盖"看图 + 审图"两个动作。
+
+| 环节 | 行为 |
+|------|------|
+| 前置 | 后端已起（`./scripts/dev-minimal.sh`）；`uv sync --extra dev` 已拉到 `ezdxf`。**无需安装 ODAFileConverter** |
+| 操作 1 | Explorer 双击 .dwg 或 .dxf |
+| 期望 1 | 中央区直接出现 cad-viewer：可平移/缩放/选实体/切图层/查图层统计；首次加载 1-2 秒下载 viewer bundle |
+| 操作 2A | 在 viewer 工具栏点「AI 审图」按钮 |
+| 期望 2A | viewer 把 in-browser 解析得到的 DXF 文本通过 IPC 送到 `POST /v1/chat`（带 `dxf_text` 字段）→ 走 `wfm.cad_review` recipe → 右侧任务对话出现回复 |
+| 操作 2B（兼容路径） | 在「任务对话」直接输入：`审一下 <相对路径>.dxf` |
+| 期望 2B | 后端 chat 路由识别到 .dxf token → 磁盘 lookup → ezdxf 摘要 → 同 recipe 回复 |
+
+**API**：
+- 审图：仅复用 `POST /v1/chat`，body 在 v0.1 基础上**新增可选 `dxf_text` 字段**（前端 viewer 触发时填入；聊天打字触发时不填）
+- ~~`POST /v1/cad/convert`~~（v0.1 接口，v0.2 已下线）
+
+**前端**：
+- 模块 `contrib/wfm/cadReview/`（EditorPane + .dwg/.dxf 双关联 + webview 内嵌 cad-viewer）
+- `IWfmAgentClientService.chat(message, { dxfText? })` 接受可选 inline DXF
+- ~~`convertDwgToDxf` / Explorer 右键菜单~~（v0.1 接口，v0.2 已下线）
+
+**v0.2 已落地**（v0.1 列为"v2 缺口"的项）：
+- ✅ DXF / DWG 真渲染（cad-viewer + libredwg-web + Three.js + WebGL）
+- ✅ viewer ↔ 审图触发联动（工具栏按钮）
+
+**仍是缺口（Phase 3）**：
+
+（方案说明：[CAD_AI_SELECTION_REVIEW.md](CAD_AI_SELECTION_REVIEW.md)。）
+
+- 审图意见 issue ←→ viewer 实体高亮（双向定位）
+- @文件自动补全
+- 多模态视觉补充（截图喂 GPT-4V）
+- 批量审图 + issue 持久化

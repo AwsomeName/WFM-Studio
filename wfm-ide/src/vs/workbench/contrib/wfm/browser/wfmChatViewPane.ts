@@ -19,7 +19,10 @@ import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
-import { IWfmAgentClientService } from '../common/wfmAgentClient.js';
+import {
+	IWfmAgentClientService,
+	IWfmChatExtras,
+} from '../common/wfmAgentClient.js';
 
 const $ = dom.$;
 
@@ -30,6 +33,11 @@ interface IMessageEntry {
 	readonly content: string;
 	/** From chat reply: backend-resolved workspace (Step D 验收). */
 	readonly workspacePath?: string;
+	/**
+	 * 来自外部 pane（如 CAD viewer）投递时的来源标签，
+	 * 在用户气泡下方以小字提示，例如「来自 viewer: foo.dwg」。
+	 */
+	readonly originLabel?: string;
 }
 
 export class WfmChatViewPane extends ViewPane {
@@ -59,6 +67,17 @@ export class WfmChatViewPane extends ViewPane {
 		@ILogService private readonly logService: ILogService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
+
+		// 订阅外部投递（CAD viewer 工具栏「AI 审图」按钮等）。
+		// 这里订阅，但具体渲染要依赖 renderBody() 已经执行；agent service
+		// 的 submitExternalChat 会先 openView 再 fire，确保 renderBody 已跑。
+		this._register(this.agentClient.onExternalChatSubmission(submission => {
+			void this.runChat({
+				text: submission.message,
+				extras: submission.extras,
+				originLabel: submission.originLabel,
+			});
+		}));
 	}
 
 	protected override renderBody(container: HTMLElement): void {
@@ -123,25 +142,45 @@ export class WfmChatViewPane extends ViewPane {
 	}
 
 	private async onSend(): Promise<void> {
-		if (!this.inputEl || !this.sendButton) {
+		if (!this.inputEl) {
 			return;
 		}
 		const text = this.inputEl.value.trim();
 		if (!text) {
 			return;
 		}
+		this.inputEl.value = '';
+		await this.runChat({ text });
+	}
+
+	/**
+	 * 共享的"发一条消息 + 渲染 user/assistant 气泡"流水线。
+	 * 既给 onSend()（用户敲键盘）用，也给 onExternalChatSubmission（viewer 触发）用。
+	 *
+	 * 当 submission 已在跑时，新的请求会被静默丢弃；调用方可以通过等待 returned
+	 * promise 来串行化。
+	 */
+	private async runChat(args: {
+		readonly text: string;
+		readonly extras?: IWfmChatExtras;
+		readonly originLabel?: string;
+	}): Promise<void> {
+		const text = args.text.trim();
+		if (!text) {
+			return;
+		}
 		if (this.pendingCts) {
+			// 简单串行：上一条还没回，先丢掉本次（与原 onSend 行为一致）。
 			return;
 		}
 
-		this.appendMessage({ role: 'user', content: text });
-		this.inputEl.value = '';
+		this.appendMessage({ role: 'user', content: text, originLabel: args.originLabel });
 		this.setBusy(true);
 
 		const cts = new CancellationTokenSource();
 		this.pendingCts = cts;
 		try {
-			const reply = await this.agentClient.chat(text, cts.token);
+			const reply = await this.agentClient.chat(text, args.extras, cts.token);
 			this.appendMessage({
 				role: 'assistant',
 				content: reply.content,
@@ -185,6 +224,14 @@ export class WfmChatViewPane extends ViewPane {
 		header.textContent = this.roleLabel(entry.role);
 		const body = dom.append(item, $('div.wfm-msg-body'));
 		body.textContent = entry.content;
+		if (entry.role === 'user' && entry.originLabel) {
+			const meta = dom.append(item, $('div.wfm-msg-origin'));
+			meta.textContent = localize(
+				'wfm.chat.originMeta',
+				"来自: {0}",
+				entry.originLabel,
+			);
+		}
 		if (entry.role === 'assistant' && entry.workspacePath) {
 			const meta = dom.append(item, $('div.wfm-msg-ws'));
 			meta.textContent = localize(

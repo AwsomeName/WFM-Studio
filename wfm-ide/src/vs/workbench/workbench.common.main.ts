@@ -216,6 +216,7 @@ import './contrib/imageCarousel/browser/imageCarousel.contribution.js';
 
 // WFM Studio (AI 最小闭环，见 docs/PLAN.md §8.2 Step B)
 import './contrib/wfm/browser/wfm.contribution.js';
+import './contrib/wfm/cadReview/browser/cadReview.contribution.js';
 
 // Interactive
 import './contrib/interactive/browser/interactive.contribution.js';

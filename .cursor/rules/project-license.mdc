@@ -1,0 +1,28 @@
+---
+description: WFM Studio 开源与依赖选型策略
+alwaysApply: true
+---
+
+# 开源与依赖选型策略
+
+**本项目完全开源，全部源码在 GitHub 公开**，包括对 `wfm-ide`（vscode fork）的所有定制改动、`wfm-agents`、文档、脚本等。
+
+## 对 AI Agent 的硬规则
+
+1. **不要再就 license 兼容性反复追问用户**。本项目接受任何主流开源 license（MIT / Apache-2.0 / BSD / GPL-2 / GPL-3 / LGPL / MPL / EPL 等），包括 viral copyleft（GPL-3、AGPL-3）。
+2. **GPL-3 viral 不构成选型障碍**。引入 GPL-3 / AGPL-3 依赖（运行时链接、动态加载、WASM、子进程都算）时，**不需要询问用户是否能接受**，直接选用即可。
+3. **`UNLICENSED` / 未声明 license / 商业禁用 license**仍然要避开（如 `@x-viewer/core`），这种情况下选 OSS 替代品并在文档里说明原因。
+4. **优先选活跃维护、社区主流、文档齐全的 OSS 组件**。其次再考虑 license 对发行的影响。
+5. 第三方依赖的 license 信息应在 `docs/` 对应的架构文档里**记录一行**（"X (license: GPL-3)"），方便审计；但**不需要每次重新和用户确认**。
+
+## 对应实践
+
+- 添加新 npm/pip/cargo 依赖时，照常 `npm install` / `uv add` / `cargo add`，事后在文档里点明 license 即可
+- `third_party/` 下 vendor 的代码（git subtree pull 的）也是同样原则，license 多元 OK
+- `wfm-ide/LICENSE.txt` 沿用上游 vscode 的 MIT；本项目作为整体若引入 GPL-3 组件，整体发行需标 GPL-3，这是预期的，不是问题
+
+## 不变的边界
+
+- 仍要遵守 `wfm-ide-fork-policy.mdc`（subtree 升级友好的代码组织规则）
+- 仍要避免泄露 secrets / API keys（`.env`、`credentials.json` 等）
+- 商业 / 闭源依赖（含未来某天 cad-viewer 之类突然改 license）发现后要立刻在文档里告警并替换

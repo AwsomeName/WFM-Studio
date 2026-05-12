@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .agenticx_engine import AgenticxEngine
-from .anthropic_engine import AnthropicEngine
+from .openai_engine import OpenAIEngine
 from .base import EngineAdapter
 from .crewai_engine import CrewAIEngine
 from .maf_engine import MafEngine
@@ -27,6 +27,6 @@ def build_default_engine_registry() -> EngineRegistry:
             CrewAIEngine.engine_id: CrewAIEngine(),
             MafEngine.engine_id: MafEngine(),
             AgenticxEngine.engine_id: AgenticxEngine(),
-            AnthropicEngine.engine_id: AnthropicEngine(),
+            OpenAIEngine.engine_id: OpenAIEngine(),
         }
     )

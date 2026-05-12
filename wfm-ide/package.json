@@ -147,6 +147,11 @@
     "yazl": "^2.4.3"
   },
   "devDependencies": {
+    "@mlightcad/cad-simple-viewer": "^1.5.0",
+    "@mlightcad/data-model": "^1.7.33",
+    "@mlightcad/libredwg-converter": "^3.5.33",
+    "@mlightcad/libredwg-web": "^0.7.1",
+    "@mlightcad/three-renderer": "^1.0.0",
     "@playwright/cli": "^0.1.1",
     "@playwright/test": "^1.56.1",
     "@stylistic/eslint-plugin-ts": "^2.8.0",
@@ -191,6 +196,7 @@
     "debounce": "^1.0.0",
     "deemon": "^1.13.6",
     "electron": "39.8.7",
+    "esbuild": "^0.28.0",
     "eslint": "^9.36.0",
     "eslint-formatter-compact": "^8.40.0",
     "eslint-plugin-header": "3.1.1",
@@ -238,6 +244,7 @@
     "source-map": "0.6.1",
     "source-map-support": "^0.3.2",
     "tar": "^7.5.9",
+    "three": "^0.184.0",
     "tsec": "0.2.7",
     "tslib": "^2.6.3",
     "typescript": "^6.0.0-dev.20260401",

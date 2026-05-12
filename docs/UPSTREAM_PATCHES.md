@@ -65,7 +65,8 @@
   - 注释（精简工作台）：terminal / debug / scm / testing 的 contribution import
   - 新增（Uni-Studio 模块）：`contrib/uni/browser/uni.contribution.js`
   - 后续新增：`contrib/uni/pptEditor/browser/pptEditor.contribution.js`、`contrib/uni/docGen/browser/docGen.contribution.js`
-- 目的：裁剪不需要的开发者模块 + 挂载 Uni-Studio 自己的模块
+  - 新增（WFM CAD 浏览与审图）：`contrib/wfm/cadReview/browser/cadReview.contribution.js`（v0.2：webview 内嵌 cad-viewer + libredwg-web 真渲染 .dwg/.dxf；详见 `docs/ARCH_CAD_REVIEW.md`）
+- 目的：裁剪不需要的开发者模块 + 挂载 Uni-Studio / WFM Studio 自己的模块
 - 升级检查：确认注释和新增都还在；若上游重命名/删除我们依赖的模块路径，需调整
 
 ### wfm-ide/src/vs/workbench/browser/workbench.contribution.ts
@@ -81,6 +82,13 @@
 - 改动摘要：注释 `AgentHostTerminalContribution` 注册（line ~69）
 - 目的：关闭 VS Code 内置 AgentHost 子系统告警（与本项目的 Agent 无关）
 - 升级检查：确认注释还在；若上游重构此注册方式，需重新定位
+
+### wfm-ide/package.json
+
+- 改动类型：新增 devDependencies
+- 改动摘要：增加 `@mlightcad/cad-simple-viewer`、`@mlightcad/data-model`、`@mlightcad/three-renderer`、`@mlightcad/libredwg-web`、`three`、`esbuild`，仅用于 `scripts/build-cad-viewer.mjs` 把 vendor 打成 `contrib/wfm/cadReview/browser/media/cad-viewer.iife.js`（v0.2 真渲染）
+- 目的：CAD viewer vendor 打包；运行时不依赖这些包（webview 直接 `<script>` 加载 IIFE 产物）
+- 升级检查：若上游 vscode 调整 devDependencies 列表导致冲突，照表合并即可；若 cad-simple-viewer 改 worker 配置，同步改 `scripts/build-cad-viewer.mjs` 与 `contrib/wfm/cadReview/browser/cadViewerEditor.ts` 中 `workerUrls` 注入
 
 ### wfm-ide/resources/darwin/code.icns
 
@@ -103,6 +111,9 @@
 
 ## 变更日志（每次修改或升级时追加一条）
 
+- 2026-05-09 S2：完成 ARCH_CAD_REVIEW v0.2 落地。前端新增 `cadViewerEditor.ts` / `cadViewerEditorInput.ts` / `cadViewerMessages.ts` / `media/{viewer.html-inline,viewer.js,viewer.css,VENDOR.md}`；删除 `dxfEditor.ts` / `dxfEditorInput.ts` / `media/dxfPreview.css`。`common/wfmAgentClient.ts` 加 `IWfmChatExtras` / `submitExternalChat` / `onExternalChatSubmission`；`browser/wfmAgentClientService.ts` 实现外部投递；`browser/wfmChatViewPane.ts` 订阅外部投递并复用 `runChat()`。后端 `cad/__init__.py` 加 `summarize_dxf_text`，`routes/chat.py` 加 `dxf_text` / `dxf_source_uri` 字段（`viewer_inline` 优先于 `workspace_file`）。`docs/ARCH_CAD_REVIEW.md` v0.2 + `wfm-ide/scripts/build-cad-viewer.mjs` + `wfm-ide/build/cad-viewer-entry.mjs` 配套
+- 2026-05-09 ARCH_CAD_REVIEW v0.2：CAD 审图链路重构 —— 后端 ODA 整组下线（删 `wfm_agents/cad/converter.py`、`wfm_agents/routes/cad.py`、`server.py` 中 `cad.router` 注册、`__init__.py` 三个 ODA symbol export、`tests/test_cad.py` 两个 ODA 测试 class）；前端 `contrib/wfm/cadReview/browser/` 改为 cad-viewer（MIT）+ libredwg-web（GPL-3）webview，关联 .dxf + .dwg 双扩展；删 `wfm.cad.convertToDxf` 命令、Explorer 右键菜单与 `convertDwgToDxf` 客户端接口。`workbench.common.main.ts` 中的 import 路径 `contrib/wfm/cadReview/browser/cadReview.contribution.js` 不变（contribution 文件名保留，内部实现整改）
+- 2026-05-09 `workbench.common.main.ts` 新增 `contrib/wfm/cadReview/browser/cadReview.contribution.js`（CAD 审图最小闭环 v0.1：DWG → DXF + DXF 预览编辑器 + Explorer 右键命令；v0.2 实现重构，import 路径保持不变）
 - 2026-05-07 `main.ts`：`argv.json` 缺省/空 `locale` 时合并写回 `zh-cn`，`ENOENT` 创建后立刻再读；`nls.ts`：dev 与无 `commit` 时仍走语言包（缓存段 `development`）
 - 2026-05-07 `main.ts` 默认 `argv.json` 写入 `locale: zh-cn`；`product.json` 增加 `extensionsGallery` 与简体中文内置语言包条目
 - 2026-04-20 放宽 workbench HTML CSP `connect-src`，允许 Agent 本地 HTTP/WS（`workbench.html` / `workbench-dev.html`）

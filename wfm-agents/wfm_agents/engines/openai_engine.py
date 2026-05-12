@@ -1,4 +1,4 @@
-"""Anthropic Messages API engine — tool loop via ToolHandle only (ARCH §3.6)."""
+"""OpenAI Chat Completions engine — tool loop via ToolHandle only (ARCH §3.6)."""
 
 from __future__ import annotations
 
@@ -23,42 +23,41 @@ from ..gateway.session import SessionContext
 from ..observability import errors as err
 from ..tools.handle import ToolHandle
 from ..tools.spec import ToolResult, ToolSpec
-from .anthropic_errors import AnthropicApiError, AnthropicConfigError
+from .openai_errors import OpenAIApiError, OpenAIConfigError
 
 _INSTALL_HINT = (
-    "Anthropic SDK 未安装。请执行: uv sync --extra anthropic "
-    "或 pip install 'wfm-agents[anthropic]'"
+    "OpenAI SDK 未安装。请执行: uv sync 或 pip install 'wfm-agents'（已将 openai 作为主依赖）。"
 )
 
-_DEFAULT_MODEL = "claude-sonnet-4-20250514"
+_DEFAULT_MODEL = "gpt-4o-mini"
 
 
 @dataclass(frozen=True)
-class _AnthropicRuntimeConfig:
+class _OpenAIRuntimeConfig:
     api_key: str
     model: str
     max_tool_rounds: int
     base_url: str | None
 
 
-def _load_runtime_config(ctx: SessionContext) -> _AnthropicRuntimeConfig:
-    key = (getenv("WFM_ANTHROPIC_API_KEY") or getenv("ANTHROPIC_API_KEY") or "").strip()
+def _load_runtime_config(ctx: SessionContext) -> _OpenAIRuntimeConfig:
+    key = (getenv("WFM_OPENAI_API_KEY") or getenv("OPENAI_API_KEY") or "").strip()
     if not key:
-        raise AnthropicConfigError(
-            "未配置 Anthropic API Key：请设置 WFM_ANTHROPIC_API_KEY 或 ANTHROPIC_API_KEY。"
+        raise OpenAIConfigError(
+            "未配置 OpenAI API Key：请设置 WFM_OPENAI_API_KEY 或 OPENAI_API_KEY。"
         )
-    model = (ctx.model_override or getenv("WFM_ANTHROPIC_MODEL") or _DEFAULT_MODEL).strip()
-    rounds_raw = (getenv("WFM_ANTHROPIC_MAX_TOOL_ROUNDS") or "16").strip()
+    model = (ctx.model_override or getenv("WFM_OPENAI_MODEL") or _DEFAULT_MODEL).strip()
+    rounds_raw = (getenv("WFM_OPENAI_MAX_TOOL_ROUNDS") or "16").strip()
     try:
         max_tool_rounds = int(rounds_raw)
     except ValueError as exc:
-        raise AnthropicConfigError(
-            f"WFM_ANTHROPIC_MAX_TOOL_ROUNDS 非法: {rounds_raw!r}"
+        raise OpenAIConfigError(
+            f"WFM_OPENAI_MAX_TOOL_ROUNDS 非法: {rounds_raw!r}"
         ) from exc
     if max_tool_rounds <= 0:
-        raise AnthropicConfigError("WFM_ANTHROPIC_MAX_TOOL_ROUNDS 必须 > 0")
-    base = (getenv("WFM_ANTHROPIC_BASE_URL") or "").strip() or None
-    return _AnthropicRuntimeConfig(
+        raise OpenAIConfigError("WFM_OPENAI_MAX_TOOL_ROUNDS 必须 > 0")
+    base = (getenv("WFM_OPENAI_BASE_URL") or "").strip() or None
+    return _OpenAIRuntimeConfig(
         api_key=key,
         model=model,
         max_tool_rounds=max_tool_rounds,
@@ -66,18 +65,16 @@ def _load_runtime_config(ctx: SessionContext) -> _AnthropicRuntimeConfig:
     )
 
 
-def _require_anthropic():
+def _require_openai():
     try:
-        import anthropic  # noqa: PLC0415
+        import openai  # noqa: PLC0415
     except ImportError as exc:
-        raise EngineNotInstalledError("anthropic", _INSTALL_HINT) from exc
-    return anthropic
+        raise EngineNotInstalledError("openai", _INSTALL_HINT) from exc
+    return openai
 
 
-def _tool_specs_to_anthropic(
-    specs: list[ToolSpec],
-) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    """Project ToolSpec list to Claude tools; return api_name -> fqn map."""
+def _tool_specs_to_openai(specs: list[ToolSpec]) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Project ToolSpec list to Chat Completions tools; return api_name -> fqn map."""
     ordered = sorted(specs, key=lambda s: s.fqn)
     name_to_fqn: dict[str, str] = {}
     tools: list[dict[str, Any]] = []
@@ -85,48 +82,49 @@ def _tool_specs_to_anthropic(
         api_name = f"wfm_t{i}"
         name_to_fqn[api_name] = spec.fqn
         schema = spec.json_schema if spec.json_schema else {}
+        params: dict[str, Any]
         if not schema:
-            input_schema: dict[str, Any] = {"type": "object", "properties": {}}
+            params = {"type": "object", "properties": {}}
+        elif isinstance(schema.get("type"), str) or "properties" in schema:
+            params = schema
         else:
-            input_schema = schema
+            params = schema
         tools.append(
             {
-                "name": api_name,
-                "description": spec.title,
-                "input_schema": input_schema,
+                "type": "function",
+                "function": {
+                    "name": api_name,
+                    "description": spec.title or spec.fqn,
+                    "parameters": params,
+                },
             }
         )
     return tools, name_to_fqn
 
 
-def _content_blocks_to_param(
-    content: list[Any],
-) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for block in content:
-        btype = getattr(block, "type", None)
-        if btype == "text":
-            out.append({"type": "text", "text": getattr(block, "text", "")})
-        elif btype == "tool_use":
-            out.append(
+def _assistant_message_payload(msg: Any) -> dict[str, Any]:
+    """Serialize assistant ChatCompletionMessage to API message dict."""
+    content = getattr(msg, "content", None)
+    payload: dict[str, Any] = {"role": "assistant", "content": content}
+    tool_calls = getattr(msg, "tool_calls", None)
+    if tool_calls:
+        serialized: list[dict[str, Any]] = []
+        for tc in tool_calls:
+            fn = getattr(tc, "function", None)
+            serialized.append(
                 {
-                    "type": "tool_use",
-                    "id": block.id,
-                    "name": block.name,
-                    "input": block.input,
+                    "id": getattr(tc, "id", ""),
+                    "type": getattr(tc, "type", "function") or "function",
+                    "function": {
+                        "name": getattr(fn, "name", "") if fn else "",
+                        "arguments": getattr(fn, "arguments", "{}") if fn else "{}",
+                    },
                 }
             )
-    return out
-
-
-def _extract_text(content: list[Any]) -> str:
-    parts: list[str] = []
-    for block in content:
-        if getattr(block, "type", None) == "text":
-            t = getattr(block, "text", "")
-            if isinstance(t, str) and t:
-                parts.append(t)
-    return "".join(parts).strip()
+        payload["tool_calls"] = serialized
+    elif content is None:
+        payload["content"] = ""
+    return payload
 
 
 def _format_tool_result(result: ToolResult) -> str:
@@ -145,40 +143,60 @@ def _format_tool_result(result: ToolResult) -> str:
 def _usage_from_response(usage: Any, *, model: str | None = None) -> UsageStats | None:
     if usage is None:
         return None
-    inp = getattr(usage, "input_tokens", None)
-    out = getattr(usage, "output_tokens", None)
-    if inp is None and out is None:
+    inp = getattr(usage, "prompt_tokens", None)
+    out = getattr(usage, "completion_tokens", None)
+    total = getattr(usage, "total_tokens", None)
+    if inp is None and out is None and total is None:
         return None
-    total = None
-    if isinstance(inp, int) and isinstance(out, int):
+    if isinstance(inp, int) and isinstance(out, int) and total is None:
         total = inp + out
     return UsageStats(
         input_tokens=inp if isinstance(inp, int) else None,
         output_tokens=out if isinstance(out, int) else None,
-        total_tokens=total,
+        total_tokens=total if isinstance(total, int) else None,
         cost_usd=None,
-        provider="anthropic",
+        provider="openai",
         model=model,
     )
 
 
-class AnthropicEngine:
-    """Sync Claude Messages loop; streaming mirrors DevUIEngine (executor + drain)."""
+def _extract_choice_text(message: Any) -> str:
+    c = getattr(message, "content", None)
+    if isinstance(c, str):
+        return c.strip()
+    if isinstance(c, list):
+        parts: list[str] = []
+        for block in c:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    t = block.get("text")
+                    if isinstance(t, str):
+                        parts.append(t)
+            elif getattr(block, "type", None) == "text":
+                t = getattr(block, "text", "")
+                if isinstance(t, str):
+                    parts.append(t)
+        return "".join(parts).strip()
+    return ""
 
-    engine_id: ClassVar[str] = "anthropic"
+
+class OpenAIEngine:
+    """OpenAI Chat Completions tool loop; streaming mirrors Anthropic/DevUI executor pattern."""
+
+    engine_id: ClassVar[str] = "openai"
 
     def run_turn(self, ctx: SessionContext, tools: ToolHandle) -> TurnResult:
         received_at = datetime.now(timezone.utc).isoformat()
-        anthropic = _require_anthropic()
+        openai_sdk = _require_openai()
         cfg = _load_runtime_config(ctx)
 
         client_kwargs: dict[str, Any] = {"api_key": cfg.api_key}
         if cfg.base_url:
             client_kwargs["base_url"] = cfg.base_url
-        client = anthropic.Anthropic(**client_kwargs)
+        client = openai_sdk.OpenAI(**client_kwargs)
 
         specs = tools.list_tool_specs()
-        tools_param, name_to_fqn = _tool_specs_to_anthropic(specs)
+        tools_param, name_to_fqn = _tool_specs_to_openai(specs)
 
         user_text = ctx.message
         if ctx.recipe_id:
@@ -188,14 +206,12 @@ class AnthropicEngine:
         last_usage: UsageStats | None = None
         final_text = ""
         rounds = 0
-        assistant_blocks: list[Any] = []
+        last_message: Any = None
 
-        create_kwargs_base: dict[str, Any] = {
-            "model": cfg.model,
-            "max_tokens": 16_384,
-        }
+        create_kwargs_base: dict[str, Any] = {"model": cfg.model}
         if tools_param:
             create_kwargs_base["tools"] = tools_param
+            create_kwargs_base["tool_choice"] = "auto"
 
         try:
             while rounds < cfg.max_tool_rounds:
@@ -203,74 +219,65 @@ class AnthropicEngine:
                     break
                 rounds += 1
                 try:
-                    resp = client.messages.create(
+                    resp = client.chat.completions.create(
                         **create_kwargs_base,
                         messages=messages,
                     )
-                except anthropic.APIStatusError as exc:
+                except openai_sdk.APIStatusError as exc:
                     status = int(getattr(exc, "status_code", 502) or 502)
-                    raise AnthropicApiError(str(exc), status_code=status) from exc
+                    raise OpenAIApiError(str(exc), status_code=status) from exc
 
                 last_usage = (
                     _usage_from_response(getattr(resp, "usage", None), model=cfg.model)
                     or last_usage
                 )
+                choice = resp.choices[0]
+                last_message = choice.message
+                messages.append(_assistant_message_payload(last_message))
 
-                assistant_blocks = list(resp.content)
-                messages.append(
-                    {"role": "assistant", "content": _content_blocks_to_param(assistant_blocks)}
-                )
-
-                tool_uses = [
-                    b for b in assistant_blocks if getattr(b, "type", None) == "tool_use"
-                ]
-                if not tool_uses:
-                    final_text = _extract_text(assistant_blocks)
+                tool_calls = getattr(last_message, "tool_calls", None) or []
+                if not tool_calls:
+                    final_text = _extract_choice_text(last_message)
                     break
 
-                tool_result_items: list[dict[str, Any]] = []
-                for tu in tool_uses:
-                    name = getattr(tu, "name", "")
+                for tc in tool_calls:
+                    fn = getattr(tc, "function", None)
+                    name = getattr(fn, "name", "") if fn else ""
                     fqn = name_to_fqn.get(name)
+                    raw_args = getattr(fn, "arguments", "{}") if fn else "{}"
+                    try:
+                        args = json.loads(raw_args) if isinstance(raw_args, str) else {}
+                    except json.JSONDecodeError:
+                        args = {}
+                    if not isinstance(args, dict):
+                        args = {}
                     if fqn is None:
-                        tool_result_items.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tu.id,
-                                "content": json.dumps(
-                                    {
-                                        "ok": False,
-                                        "error": f"unknown tool name from model: {name!r}",
-                                    },
-                                    ensure_ascii=False,
-                                ),
-                            }
+                        content = json.dumps(
+                            {"ok": False, "error": f"unknown tool name from model: {name!r}"},
+                            ensure_ascii=False,
                         )
-                        continue
-                    raw_input = getattr(tu, "input", None)
-                    args = raw_input if isinstance(raw_input, dict) else {}
-                    result = tools.invoke(fqn, args)
-                    tool_result_items.append(
+                    else:
+                        result = tools.invoke(fqn, args)
+                        content = _format_tool_result(result)
+                    messages.append(
                         {
-                            "type": "tool_result",
-                            "tool_use_id": tu.id,
-                            "content": _format_tool_result(result),
+                            "role": "tool",
+                            "tool_call_id": getattr(tc, "id", ""),
+                            "content": content,
                         }
                     )
 
-                messages.append({"role": "user", "content": tool_result_items})
-
             if rounds >= cfg.max_tool_rounds and not final_text:
-                final_text = _extract_text(assistant_blocks)
-        except AnthropicConfigError:
+                final_text = _extract_choice_text(last_message) if last_message else ""
+        except OpenAIConfigError:
             raise
         except EngineNotInstalledError:
             raise
-        except AnthropicApiError:
+        except OpenAIApiError:
             raise
 
         if not final_text.strip():
-            final_text = "[anthropic] 未生成文本回复。"
+            final_text = "[openai] 未生成文本回复。"
 
         return TurnResult(
             content=final_text.strip(),
@@ -309,7 +316,7 @@ class AnthropicEngine:
 
         try:
             result: TurnResult = await fut
-        except AnthropicConfigError as exc:
+        except OpenAIConfigError as exc:
             yield ErrorStreamEvent(
                 type="error",
                 code=err.VALIDATION_ERROR,
@@ -325,7 +332,7 @@ class AnthropicEngine:
                 trace_id=ctx.trace_id,
             )
             return
-        except AnthropicApiError as exc:
+        except OpenAIApiError as exc:
             code = (
                 err.ENGINE_UPSTREAM_4XX
                 if 400 <= exc.status_code < 500
