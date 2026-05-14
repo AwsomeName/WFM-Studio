@@ -1,8 +1,10 @@
 # ARCH_CAD_REVIEW — CAD 浏览与审图
 
 > **版本**：v0.2（2026-05-09）；**字体管线**：同日起 vendor `cad-data/fonts` + `fonts.json` alias + eventBus 上报（见 §4.6）
-> **关联**：[USAGE_CAD_VIEWER.md](USAGE_CAD_VIEWER.md)（用户操作指南）、[PRD.md](PRD.md)、[TASK_SCENARIOS.md](TASK_SCENARIOS.md)、[UPSTREAM_PATCHES.md](UPSTREAM_PATCHES.md)、[ARCH_AGENT_GATEWAY.md](ARCH_AGENT_GATEWAY.md)
+> **关联**：[USAGE_CAD_VIEWER.md](USAGE_CAD_VIEWER.md)（用户操作指南）、[PRD.md](PRD.md)、[TASK_SCENARIOS.md](TASK_SCENARIOS.md)、[UPSTREAM_PATCHES.md](UPSTREAM_PATCHES.md)、**[ARCH_AGENT_SDK_NATIVE.md](ARCH_AGENT_SDK_NATIVE.md)（对话后端正式规格）**、~~[ARCH_AGENT_GATEWAY.md](ARCH_AGENT_GATEWAY.md)~~（已废弃，保留为历史背景）
 > **变更**：v0.1 走"后端 spawn ODAFileConverter + 前端文本预览"路线，已被实测证伪（macOS 上 ODA 在 headless 子进程里 NSXPC bootstrap 失败、SIGABRT）。v0.2 改走"前端 in-browser 渲染（cad-viewer + libredwg-web）+ 后端 ezdxf 摘要"路线，**彻底移除后端的 DWG→DXF 转换链路**，并把中央编辑区从「文本预览」升级为**真 CAD viewer**（pan/zoom/选择/图层显隐/Hatch GPU 渲染）。
+>
+> **2026-05-14 增量**：审图的**后端调用链路**已切到 **OpenAI Agents SDK**（`agent_v2/`）。路由层通过 `agent_v2.runner.run_chat()` 调用 `cad_review_agent`，工具由 `@function_tool` 注册，GLM-5.1 输出的 JSON 经手动 code-fence 剥离后做 schema 验证。viewer / 字体管线 / DXF 摘要等本文其余内容**保持不变**。新链路细节见 [`ARCH_AGENT_SDK_NATIVE.md`](ARCH_AGENT_SDK_NATIVE.md) 和 [`WHY_AGENTS_SDK.md`](WHY_AGENTS_SDK.md)。
 
 ---
 
@@ -44,7 +46,7 @@ flowchart LR
     detect["routes/chat.py 检测<br/>dxf_text 优先 / 回退磁盘 .dxf"]
     parser["cad.parser.summarize_dxf<br/>(ezdxf)"]
     recipe["cad.recipes.cad_review_prompt"]
-    engine["engine: echo / single / anthropic"]
+    engine["agent_v2.runner (cad_review_agent)"]
     reply["assistant 回复 → 任务对话"]
 
     user --> explorer --> pane --> webview
@@ -83,8 +85,8 @@ flowchart LR
 class ChatRequest(BaseModel):
     workspace_root: str
     message: str
-    engine: Literal["echo", "single", "anthropic", "crewai", "maf", "agenticx"] = "echo"
-    mode: Literal["echo", "review"] = "echo"
+    engine: str | None = None        # 已废弃（接受但忽略）
+    mode: str | None = None          # 已废弃（接受但忽略）
     # v0.2 新增（可选）：前端 viewer 直接附带的 DXF 文本
     # 存在时优先于消息里 .dxf token + 磁盘 lookup；workspace_root 仍要传（用于审计）
     dxf_text: str | None = Field(None, description="In-browser 解析得到的 DXF 文本；优先于磁盘 lookup")
@@ -311,7 +313,9 @@ uv run uvicorn wfm_agents.server:app --reload --host 127.0.0.1 --port 8765
 
 ## 8. 后续计划（Phase 3 候选）
 
-**设计摘要（选区审图 / 截图多模态 / Issue 反标）**：见 [CAD_AI_SELECTION_REVIEW.md](CAD_AI_SELECTION_REVIEW.md)。
+**配套文档**：
+- [CAD_AI_FEASIBILITY.md](CAD_AI_FEASIBILITY.md) — 效果可行性、能力边界、必备工具底座、优先级建议（"能做到什么效果"）
+- [CAD_AI_SELECTION_REVIEW.md](CAD_AI_SELECTION_REVIEW.md) — 选区审图 / 截图多模态 / Issue 反标的实现方案（"怎么做"）
 
 - [ ] viewer ←→ 审图意见联动高亮（issue 行号 / 实体 handle 双向跳转）
 - [ ] 多模态视觉补充（cad-viewer 离屏 canvas → PNG 截图喂 GPT-4V / Claude 视觉）

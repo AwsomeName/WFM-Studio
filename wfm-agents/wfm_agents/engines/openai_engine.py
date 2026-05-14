@@ -38,6 +38,7 @@ class _OpenAIRuntimeConfig:
     model: str
     max_tool_rounds: int
     base_url: str | None
+    request_timeout: float
 
 
 def _load_runtime_config(ctx: SessionContext) -> _OpenAIRuntimeConfig:
@@ -56,12 +57,22 @@ def _load_runtime_config(ctx: SessionContext) -> _OpenAIRuntimeConfig:
         ) from exc
     if max_tool_rounds <= 0:
         raise OpenAIConfigError("WFM_OPENAI_MAX_TOOL_ROUNDS 必须 > 0")
+    timeout_raw = (getenv("WFM_OPENAI_REQUEST_TIMEOUT") or "60").strip()
+    try:
+        request_timeout = float(timeout_raw)
+    except ValueError as exc:
+        raise OpenAIConfigError(
+            f"WFM_OPENAI_REQUEST_TIMEOUT 非法: {timeout_raw!r}"
+        ) from exc
+    if request_timeout <= 0:
+        raise OpenAIConfigError("WFM_OPENAI_REQUEST_TIMEOUT 必须 > 0")
     base = (getenv("WFM_OPENAI_BASE_URL") or "").strip() or None
     return _OpenAIRuntimeConfig(
         api_key=key,
         model=model,
         max_tool_rounds=max_tool_rounds,
         base_url=base,
+        request_timeout=request_timeout,
     )
 
 
@@ -208,7 +219,10 @@ class OpenAIEngine:
         rounds = 0
         last_message: Any = None
 
-        create_kwargs_base: dict[str, Any] = {"model": cfg.model}
+        create_kwargs_base: dict[str, Any] = {
+            "model": cfg.model,
+            "timeout": cfg.request_timeout,
+        }
         if tools_param:
             create_kwargs_base["tools"] = tools_param
             create_kwargs_base["tool_choice"] = "auto"

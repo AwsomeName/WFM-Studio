@@ -1,4 +1,18 @@
-"""M3: POST /v1/chat/stream SSE + executor tool events on sink (DEV_AGENT_GATEWAY §M3)."""
+"""M3: POST /v1/chat/stream SSE + executor tool events on sink.
+
+2026-05-14 SDK-native runner migration (see ``docs/ARCH_AGENT_SDK_NATIVE.md``):
+the three route-level tests below pinned the **legacy** behaviour of the
+``engine=crewai|maf|...`` fields on ``/v1/chat/stream``. After the runner
+migration those fields are accepted-but-ignored (one warning per request),
+so the assertions are no longer meaningful. Tests are kept and ``skip``-ped
+rather than deleted — they document the abandoned contract until the
+``engines/`` cleanup milestone removes both the legacy stream path and these
+tests together.
+
+The two gateway-internal tests (executor sink + ``stream_turn`` cancel) keep
+running because they exercise modules that the runner still depends on
+indirectly (and that the CAD branch will keep using until D2 下午).
+"""
 
 from __future__ import annotations
 
@@ -6,6 +20,11 @@ import json
 import time
 
 import pytest
+
+_LEGACY_ENGINE_SKIP_REASON = (
+    "Legacy engine route (crewai/maf/agenticx) is a no-op on the SDK-native "
+    "runner; will be removed alongside engines/ cleanup."
+)
 
 from fastapi.testclient import TestClient
 
@@ -38,11 +57,17 @@ def _parse_sse_events(raw: str) -> list[dict]:
     return events
 
 
+@pytest.mark.skip(reason=_LEGACY_ENGINE_SKIP_REASON)
 def test_chat_stream_echo_text_delta_and_done(client: TestClient, tmp_path) -> None:
+    """显式 engine=crewai 走 CrewAI 的固定 echo 模板（默认引擎已切到 openai）。"""
     with client.stream(
         "POST",
         "/v1/chat/stream",
-        json={"workspace_root": str(tmp_path), "message": "stream-hi"},
+        json={
+            "workspace_root": str(tmp_path),
+            "message": "stream-hi",
+            "engine": "crewai",
+        },
     ) as resp:
         assert resp.status_code == 200
         body = b"".join(resp.iter_bytes()).decode("utf-8")
@@ -55,6 +80,7 @@ def test_chat_stream_echo_text_delta_and_done(client: TestClient, tmp_path) -> N
     assert done.get("trace_id")
 
 
+@pytest.mark.skip(reason=_LEGACY_ENGINE_SKIP_REASON)
 def test_chat_stream_maf_engine_adapter(client: TestClient, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(DevUIEngine, "_call_devui_response", lambda self, ctx: "maf-stream-ok")
     with client.stream(
@@ -69,12 +95,18 @@ def test_chat_stream_maf_engine_adapter(client: TestClient, tmp_path, monkeypatc
     assert events and events[-1]["type"] == "done"
 
 
+@pytest.mark.skip(reason=_LEGACY_ENGINE_SKIP_REASON)
 def test_chat_stream_crewai_config_error_event(client: TestClient, tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("WFM_CREWAI_MODEL", raising=False)
     with client.stream(
         "POST",
         "/v1/chat/stream",
-        json={"workspace_root": str(tmp_path), "message": "crew", "mode": "single"},
+        json={
+            "workspace_root": str(tmp_path),
+            "message": "crew",
+            "mode": "single",
+            "engine": "crewai",
+        },
     ) as resp:
         assert resp.status_code == 200
         body = b"".join(resp.iter_bytes()).decode("utf-8")

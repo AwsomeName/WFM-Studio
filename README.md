@@ -25,7 +25,7 @@ WFM-Studio/
 | [`docs/PRD.md`](docs/PRD.md) | 产品需求文档 |
 | [`docs/PLAN.md`](docs/PLAN.md) | 实施计划与里程碑 |
 | [`docs/TASK_SCENARIOS.md`](docs/TASK_SCENARIOS.md) | 用户故事 |
-| [`docs/ARCH_AGENT_GATEWAY.md`](docs/ARCH_AGENT_GATEWAY.md) | Agent 网关架构 |
+| [`docs/ARCH_AGENT_GATEWAY.md`](docs/ARCH_AGENT_GATEWAY.md) | [已废弃] 旧 Agent 网关架构 |
 | [`docs/ARCH_CAD_REVIEW.md`](docs/ARCH_CAD_REVIEW.md) | CAD 审图架构 |
 | [`docs/UPSTREAM_PATCHES.md`](docs/UPSTREAM_PATCHES.md) | vscode fork 改动登记 |
 | [`docs/VSCODE_UPSTREAM.md`](docs/VSCODE_UPSTREAM.md) | vscode 升级流程 |
@@ -35,7 +35,13 @@ WFM-Studio/
 ## 快速启动
 
 ```bash
-# 一键最小闭环：后端 + IDE watch + 工作台
+# 1) 配置后端 LLM secret（首次必做）
+cp wfm-agents/.env.example wfm-agents/.env
+# 然后编辑 wfm-agents/.env 填入 WFM_OPENAI_API_KEY 等。
+# 默认走 DashScope (阿里云百炼) + glm-5.1；要切 DeepSeek / 官方 OpenAI / 其它兼容上游，
+# 改 WFM_OPENAI_BASE_URL 与 WFM_OPENAI_MODEL 即可，无需改代码。
+
+# 2) 一键最小闭环：后端 + IDE watch + 工作台
 ./scripts/dev-minimal.sh
 
 # 完整：含 AgenticX / MAF DevUI
@@ -44,5 +50,8 @@ WFM-Studio/
 # 停所有
 ./scripts/dev-stop.sh
 ```
+
+**Agent 后端**：基于 OpenAI Agents SDK（`agent_v2/`），默认走 DashScope + GLM-5.1（OpenAI Chat Completions 兼容）。
+`engine` / `mode` 字段已废弃（接受但忽略），历史原因保留。详见 [`docs/WHY_AGENTS_SDK.md`](docs/WHY_AGENTS_SDK.md)。
 
 详细开发流程见各子目录 README 与 `docs/PLAN.md` §8.3。

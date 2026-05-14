@@ -3,7 +3,7 @@
 > **状态**：规格（实现前）  
 > **更新日期**：2026-05-07  
 > **分支**：`feat/doc-generation`  
-> **关联**：`docs/PLAN.md` Phase 7、`docs/ARCH_AGENT_GATEWAY.md` 工具层
+> **关联**：`docs/PLAN.md` Phase 7、`docs/ARCH_AGENT_SDK_NATIVE.md`（对话后端正式规格；工具底座由 `agent/tools/adapter.py` 复用既有 builtin/MCP provider）。原 `docs/ARCH_AGENT_GATEWAY.md` 工具层描述已废弃，相关 provider 代码本身保留。
 
 ---
 

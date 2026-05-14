@@ -54,6 +54,12 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 	readonly onExternalChatSubmission: Event<IWfmExternalChatSubmission> =
 		this._onExternalChatSubmission.event;
 
+	private readonly _onExternalChatPrefill = this._register(
+		new Emitter<string>(),
+	);
+	readonly onExternalChatPrefill: Event<string> =
+		this._onExternalChatPrefill.event;
+
 	constructor(
 		@IRequestService private readonly requestService: IRequestService,
 		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
@@ -122,6 +128,15 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 			this.logService.warn(`[wfm] openView(${WFM_CHAT_VIEW_ID}) failed: ${err}`);
 		}
 		this._onExternalChatSubmission.fire(submission);
+	}
+
+	async prefillChatInput(text: string): Promise<void> {
+		try {
+			await this.viewsService.openView(WFM_CHAT_VIEW_ID, /*focus*/ true);
+		} catch (err) {
+			this.logService.warn(`[wfm] openView(${WFM_CHAT_VIEW_ID}) failed: ${err}`);
+		}
+		this._onExternalChatPrefill.fire(text);
 	}
 
 	async ping(token: CancellationToken = CancellationToken.None): Promise<boolean> {

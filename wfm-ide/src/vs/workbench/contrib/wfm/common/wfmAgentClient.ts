@@ -85,4 +85,15 @@ export interface IWfmAgentClientService {
 	 * 外部投递事件。WfmChatViewPane 在构造时订阅，自己负责渲染与调用 chat()。
 	 */
 	readonly onExternalChatSubmission: Event<IWfmExternalChatSubmission>;
+
+	/**
+	 * 打开聊天面板并预填输入框文本（不自动发送），让用户编辑后手动提交。
+	 * 用于 Explorer 右键「发送到 WFM 对话」等场景。
+	 */
+	prefillChatInput(text: string): Promise<void>;
+
+	/**
+	 * 预填事件。WfmChatViewPane 订阅后将文本写入输入框并聚焦。
+	 */
+	readonly onExternalChatPrefill: Event<string>;
 }

@@ -10,3 +10,8 @@ dist/
 build/
 *.log
 .DS_Store
+
+# secret 文件（仅本地有真实 key；样板在 .env.example）
+.env
+.env.local
+.env.*.local

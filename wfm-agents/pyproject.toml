@@ -1,19 +1,28 @@
 [project]
 name = "wfm-agents"
 version = "0.1.0"
-description = "WFM Studio Agent Backend - FastAPI + (future) CrewAI"
+description = "WFM Studio Agent Backend - FastAPI + OpenAI SDK (default) / CrewAI (optional)"
 readme = "README.md"
 requires-python = ">=3.11"
+# 默认引擎为 OpenAI SDK 兼容上游（DashScope/GLM、DeepSeek、官方 OpenAI 等，
+# 通过 WFM_OPENAI_BASE_URL 切换）。CrewAI 仍保留在主依赖里，方便随时
+# 回退到 engine="crewai"；后续如需瘦身可移到 optional-dependencies.crewai。
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
+    "python-dotenv>=1.0",
     "crewai>=1.14.2",
     "openai>=1.59",
+    "openai-agents",
     "mcp>=1.26.0",
     "pyyaml>=6.0.3",
     "ezdxf>=1.3",
 ]
+
+# uv 本地源码依赖：openai-agents 走仓库内 subtree 源码（editable）。
+[tool.uv.sources]
+openai-agents = { path = "../third_party/agents/openai-agents-python", editable = true }
 
 [project.optional-dependencies]
 dev = [
@@ -21,6 +30,9 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
 ]
+# 占位：未来若把 CrewAI 从主 deps 移到 optional，这里负责装。
+# 当前 main deps 已包含 crewai，本组等价空（保留 extras 名以兼容文档命令）。
+crewai = []
 # 预留给未来 AgenticX 官方 Python SDK；当前通过 DevUI 适配
 agenticx = []
 # 预留给未来 MAF Python SDK；当前通过 DevUI 适配
@@ -35,6 +47,9 @@ packages = ["wfm_agents"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# 默认跑离线套件；想跑 live API 集成请用 `uv run pytest -m integration` 或
+# `-m "not integration or integration"`（视具体测试）显式 opt-in。
+addopts = ["-m", "not integration"]
 markers = [
     "integration: optional tests hitting real external APIs",
 ]

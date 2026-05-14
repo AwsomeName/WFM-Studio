@@ -10,10 +10,17 @@
 |------|------|------|
 | `workspace_root` | 是 | 当前工作区根路径（IDE 已自动注入） |
 | `message` | 是 | 用户任务描述 |
-| `mode` | 否 | `echo` \| `single` \| `multi`；默认取自环境变量 `WFM_CHAT_MODE`，未设时为 `echo` |
-| `engine` | 否 | `crewai`（默认）\| `maf` \| `agenticx` \| `anthropic` |
+| `dxf_text` | 否 | 前端 viewer 直接附带的 DXF 文本（CAD 审图用） |
+| `dxf_source_uri` | 否 | DXF 来源 URI（审计标签） |
+| `session_id` | 否 | 会话 ID（连续对话） |
+| `language` | 否 | `zh-CN`（默认） \| `en` |
+| `recipe` | 否 | 强制指定 recipe（`plain_chat` / `cad_review` / `echo`） |
+| `mode` | 否 | 已废弃（接受但忽略） |
+| `engine` | 否 | 已废弃（接受但忽略） |
 
-响应除正文外还包含 `trace_id`（便于日志与评测），IDE 当前同步客户端未展示该字段。
+响应除正文外还包含 `session_id` 和 `trace_id`（便于日志与评测）。
+
+> **2026-05 agent_v2 迁移**：对话后端已切到 OpenAI Agents SDK（`agent_v2/`）。`engine` 和 `mode` 字段不再影响路由选择，后端统一由 `agent_v2.runner` 处理。详见 [`docs/WHY_AGENTS_SDK.md`](WHY_AGENTS_SDK.md)。
 
 ---
 
@@ -33,36 +40,38 @@
 
 ---
 
-## 用户故事 2：在 CrewAI 单任务模式下完成「改一个文件」类任务
+## 用户故事 2：用 OpenAI 兼容引擎完成「改一个文件」类任务（2026-05 默认链路）
 
 **作为**开发者，**我要**用自然语言描述对当前仓库的小改动并让 Agent 执行，**以便**减少手写重复编辑。
 
 | 环节 | 行为 |
 |------|------|
-| 前置 | 后端已配置 CrewAI（如 `WFM_CREWAI_MODEL` 等）；`mode` 为 `single` |
+| 前置 | `wfm-agents/.env` 配好 `WFM_OPENAI_API_KEY`、`WFM_OPENAI_BASE_URL`、`WFM_OPENAI_MODEL`（推荐 DashScope + `glm-5.1`）；后端默认引擎已是 `openai` |
 | 操作 | 发送明确任务（例如「在 README 末尾加一行今日日期」） |
 | 期望 | 返回可读的执行摘要或变更说明；工具若启用，应在工作区内产生真实变更（依工具策略） |
 
-**API**：`POST /v1/chat`，body 需 **`mode: "single"`**（或运维将 `WFM_CHAT_MODE=single` 作为默认）。可选 **`engine`**（默认 `crewai`）。
+**API**：`POST /v1/chat`，body 默认不需要传 `engine`（默认即 `openai`）。模型与 base_url 由后端 env 决定，前端无感知。
+
+**回退到 CrewAI**：显式 `engine: "crewai"`，需要 `WFM_CREWAI_MODEL` 等环境变量（按需 `uv sync --extra crewai` —— 当前 crewai 仍在主依赖，无需额外步骤）。
 
 **前端缺口**：
 
-- 请求体增加可选 **`mode`**（及可选 **`engine`**）——可先做下拉或设置项，默认仍不传则依赖后端环境变量。
-- UI：区分「只读 Echo」与「Crew 执行」的视觉提示（避免用户以为会改仓库时仍为 echo）。
+- 请求体增加可选 **`engine`** / **`mode`**（IDE 设置或下拉），未传则跟随后端默认（`openai`）。
+- UI：区分「只读 echo」与「真正调用 LLM」的视觉提示（默认引擎切到 openai 后，每次发消息都会真调 LLM 与消耗 token）。
 
 ---
 
-## 用户故事 3：固定编排引擎与可观测性（对比 MAF / Agenticx / Anthropic）
+## 用户故事 3：固定编排引擎与可观测性（对比 OpenAI / CrewAI / MAF / Agenticx）
 
 **作为**平台维护者，**我要**在同一工作区下切换引擎并保留追问上下文以外的关键元数据，**以便**评估不同后端表现。
 
 | 环节 | 行为 |
 |------|------|
-| 前置 | 目标引擎已安装且配置合法（如 `anthropic` 需 extras / API Key） |
+| 前置 | 目标引擎已安装且配置合法（如 `openai` 需 `WFM_OPENAI_*` env；`crewai` 需 `WFM_CREWAI_*`） |
 | 操作 | 指定 `engine` 发送相同 `message` |
 | 期望 | 不同引擎返回均可解析；失败时返回明确 HTTP 错误信息 |
 
-**API**：`POST /v1/chat`，body 增加 **`engine`**（`maf` \| `agenticx` \| `anthropic` \| `crewai`）。
+**API**：`POST /v1/chat`，body 显式传 **`engine`**（`openai` \| `crewai` \| `maf` \| `agenticx`）；不传则按 `WFM_DEFAULT_ENGINE` 选默认。
 
 **前端缺口**：
 
@@ -108,7 +117,7 @@
 
 **仍是缺口（Phase 3）**：
 
-（方案说明：[CAD_AI_SELECTION_REVIEW.md](CAD_AI_SELECTION_REVIEW.md)。）
+（配套文档：[CAD_AI_FEASIBILITY.md](CAD_AI_FEASIBILITY.md) 效果可行性与能力边界、[CAD_AI_SELECTION_REVIEW.md](CAD_AI_SELECTION_REVIEW.md) 实现方案。）
 
 - 审图意见 issue ←→ viewer 实体高亮（双向定位）
 - @文件自动补全

@@ -4,17 +4,39 @@ This module keeps CrewAI-specific logic outside FastAPI routes:
 - parse runtime config from environment variables
 - build single-task and multi-task crews
 - normalize Crew output into plain text
+
+Lazy import 说明
+----------------
+``from crewai import ...`` 被推迟到 :func:`_require_crewai` 内。理由：
+``crewai`` 在 import 期会顺带把 ``litellm`` / ``chromadb`` / ``pyarrow`` 等大依赖
+一起拖进内存（>1s + 数十 MB 占用），而当前默认引擎已切回 OpenAI SDK（见
+``routes/chat.py``），绝大多数请求不需要 CrewAI 也不应被它的 import 拖累。
+仅当用户显式 ``engine="crewai"`` 才在 run_turn 调链时触发真正的 import。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from os import getenv
-from typing import Literal
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, Literal
 
-from crewai import Agent, Crew, LLM, Process, Task
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from crewai import LLM as _LLM  # noqa: F401
 
 ChatMode = Literal["echo", "single", "multi"]
+
+
+def _require_crewai() -> SimpleNamespace:
+    """按需 import crewai；不存在时给出友好提示。"""
+    try:
+        from crewai import Agent, Crew, LLM, Process, Task  # noqa: PLC0415
+    except ImportError as exc:  # pragma: no cover - graceful fallback
+        raise CrewRuntimeConfigError(
+            "CrewAI 未安装。当前默认引擎为 openai；如需 crewai 引擎请执行: "
+            "uv sync --extra crewai （或 pip install 'crewai>=1.14.2'）。"
+        ) from exc
+    return SimpleNamespace(Agent=Agent, Crew=Crew, LLM=LLM, Process=Process, Task=Task)
 
 
 class CrewRuntimeConfigError(ValueError):
@@ -37,8 +59,9 @@ def run_crewai_chat(
     workspace_root: str,
 ) -> str:
     """Run CrewAI pipeline for the given mode and return plain assistant text."""
+    crewai = _require_crewai()
     cfg = load_runtime_config()
-    llm = build_llm(cfg)
+    llm = build_llm(cfg, crewai=crewai)
 
     if mode == "single":
         return run_single_task(
@@ -46,6 +69,7 @@ def run_crewai_chat(
             max_iter=cfg.max_iter,
             message=message,
             workspace_root=workspace_root,
+            crewai=crewai,
         )
     if mode == "multi":
         return run_multi_task(
@@ -53,6 +77,7 @@ def run_crewai_chat(
             max_iter=cfg.max_iter,
             message=message,
             workspace_root=workspace_root,
+            crewai=crewai,
         )
     raise CrewRuntimeConfigError(f"unsupported CrewAI mode: {mode}")
 
@@ -103,7 +128,8 @@ def load_runtime_config() -> CrewRuntimeConfig:
     )
 
 
-def build_llm(cfg: CrewRuntimeConfig) -> LLM:
+def build_llm(cfg: CrewRuntimeConfig, *, crewai: SimpleNamespace | None = None) -> Any:
+    crewai = crewai or _require_crewai()
     kwargs: dict[str, object] = {
         "model": cfg.model,
         "temperature": cfg.temperature,
@@ -112,17 +138,20 @@ def build_llm(cfg: CrewRuntimeConfig) -> LLM:
         kwargs["api_key"] = cfg.api_key
     if cfg.base_url:
         kwargs["base_url"] = cfg.base_url
-    return LLM(**kwargs)
+    return crewai.LLM(**kwargs)
 
 
 def run_single_task(
     *,
-    llm: LLM,
+    llm: Any,
     max_iter: int,
     message: str,
     workspace_root: str,
+    crewai: SimpleNamespace | None = None,
 ) -> str:
     """Step E-1: one agent + one task."""
+    crewai = crewai or _require_crewai()
+    Agent, Crew, Process, Task = crewai.Agent, crewai.Crew, crewai.Process, crewai.Task
     writer = Agent(
         role="WFM Writer",
         goal="给出可执行、结构清晰的中文回复",
@@ -153,12 +182,15 @@ def run_single_task(
 
 def run_multi_task(
     *,
-    llm: LLM,
+    llm: Any,
     max_iter: int,
     message: str,
     workspace_root: str,
+    crewai: SimpleNamespace | None = None,
 ) -> str:
     """Step E-2 skeleton: researcher -> writer -> reviewer."""
+    crewai = crewai or _require_crewai()
+    Agent, Crew, Process, Task = crewai.Agent, crewai.Crew, crewai.Process, crewai.Task
     researcher = Agent(
         role="Researcher",
         goal="提炼需求要点、限制和风险",

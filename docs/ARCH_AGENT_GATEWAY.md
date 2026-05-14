@@ -1,7 +1,21 @@
 # Uni-Studio 统一 Agent 网关 — 架构规格
 
-> **状态**：正式规格（产品/实现单一事实来源）  
-> **更新日期**：2026-05-07（品牌更名为 Uni-Studio；加 PPTX/Proposal 工具 FQN 与 HTTP 路由）  
+> ⚠️ **状态：已废弃（DEPRECATED, 2026-05-14）**
+>
+> 本文档描述的 `AgentGateway + EngineRegistry + EngineAdapter` 三层抽象**不再作为对话主链路**。
+> 全部 `/v1/chat*` 流量已切到 **SDK 原生** runner，直接基于 `third_party/openai/openai-python`。
+> **新方案**：[`ARCH_AGENT_SDK_NATIVE.md`](ARCH_AGENT_SDK_NATIVE.md)
+>
+> 本文继续保留是为了：
+> 1. 历史背景（理解仓库里仍存在的 `wfm_agents/engines/`、`wfm_agents/gateway/` 代码）
+> 2. 若将来引入第二个非 OpenAI 系 provider（Anthropic、Gemini）需要重新抽象时，作为对比参考
+>
+> 新功能请勿基于本文增设计；以下内容仅描述**旧实现**。
+
+---
+
+> **历史状态**：正式规格（产品/实现单一事实来源）
+> **历史更新日期**：2026-05-07（品牌更名为 Uni-Studio；加 PPTX/Proposal 工具 FQN 与 HTTP 路由）
 > **替代**：原 `docs/TMP_AGENT_GATEWAY_DESIGN.md`（已删除，避免双源）
 
 本文定义 IDE 与 Python 后端之间的 **HTTP 契约**、**工具与 MCP 聚合层**、**多引擎适配** 以及 **安全与观测**。实现须与此文档对齐；若有偏差，应先修订本文档再改代码。

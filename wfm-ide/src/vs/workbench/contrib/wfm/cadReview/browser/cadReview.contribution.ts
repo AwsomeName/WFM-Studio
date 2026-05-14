@@ -4,6 +4,9 @@
  *  v0.2: 把 *.dwg / *.dxf 关联到 webview-based CadViewerEditor。
  *  - 上游 ODA 转换链路（``wfm.cad.convertToDxf`` Action / Explorer 右键）
  *    已下线，详见 docs/ARCH_CAD_REVIEW.md。
+ *
+ *  Explorer 右键菜单：
+ *  - 「AI 审图」: .dxf 文件直接读磁盘发 dxf_text；.dwg 打开 CAD Viewer。
  *--------------------------------------------------------------------------------------------*/
 
 import { SyncDescriptor } from '../../../../../platform/instantiation/common/descriptors.js';
@@ -17,6 +20,16 @@ import { EditorInput } from '../../../../common/editor/editorInput.js';
 import { IEditorResolverService, RegisteredEditorPriority } from '../../../../services/editor/common/editorResolverService.js';
 import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
 import { IWorkbenchContribution, WorkbenchPhase, registerWorkbenchContribution2 } from '../../../../common/contributions.js';
+import { Action2, MenuId, registerAction2 } from '../../../../../platform/actions/common/actions.js';
+import { ContextKeyExpr } from '../../../../../platform/contextkey/common/contextkey.js';
+import { ServicesAccessor } from '../../../../../platform/instantiation/common/instantiation.js';
+import { IFileService } from '../../../../../platform/files/common/files.js';
+import { IEditorService } from '../../../../services/editor/common/editorService.js';
+import { ResourceContextKey } from '../../../../common/contextkeys.js';
+import { ExplorerFolderContext } from '../../../files/common/files.js';
+import { localize, localize2 } from '../../../../../nls.js';
+import { basename } from '../../../../../base/common/resources.js';
+import { IWfmAgentClientService } from '../../common/wfmAgentClient.js';
 import {
 	CAD_VIEWER_EDITOR_ID,
 	CAD_VIEWER_EDITOR_LABEL,
@@ -108,3 +121,64 @@ Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).registerEdit
 //#endregion
 
 export { CAD_VIEWER_EDITOR_ID };
+
+//#endregion
+
+//#region --- Explorer 右键菜单: AI 审图 ---
+
+class CadReviewFromExplorerAction extends Action2 {
+	constructor() {
+		super({
+			id: 'wfm.cad.reviewFromExplorer',
+			title: localize2('cadReviewFromExplorer', "AI 审图"),
+			f1: false,
+			menu: [{
+				id: MenuId.ExplorerContext,
+				group: 'navigation',
+				order: 24,
+				when: ContextKeyExpr.and(
+					ExplorerFolderContext.negate(),
+					ContextKeyExpr.regex(ResourceContextKey.Extension.key, /\.(dxf|dwg)$/i),
+				),
+			}],
+		});
+	}
+
+	async run(accessor: ServicesAccessor, resource?: URI): Promise<void> {
+		if (!URI.isUri(resource)) {
+			return;
+		}
+
+		const fileService = accessor.get(IFileService);
+		const editorService = accessor.get(IEditorService);
+		const agentClient = accessor.get(IWfmAgentClientService);
+
+		const fileName = basename(resource);
+		const ext = extname(resource).toLowerCase();
+
+		if (ext === DXF_FILE_EXTENSION) {
+			// .dxf 是纯文本，直接读磁盘发 dxf_text
+			const content = await fileService.readFile(resource);
+			const dxfText = content.value.toString();
+			await agentClient.submitExternalChat({
+				message: localize(
+					'wfm.cad.explorer.reviewMessageDefault',
+					"请审一下当前 CAD 图（{0}），用通用方法逐项检查。",
+					fileName,
+				),
+				originLabel: `explorer: ${fileName}`,
+				extras: {
+					dxfText,
+					dxfSourceUri: resource.toString(),
+				},
+			});
+		} else {
+			// .dwg 需要 WASM 转换，打开 CAD Viewer（已有「AI 审图」按钮）
+			await editorService.openEditor({ resource });
+		}
+	}
+}
+
+registerAction2(CadReviewFromExplorerAction);
+
+//#endregion

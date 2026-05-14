@@ -55,14 +55,21 @@
       "Bash(\"/Users/apple/Desktop/WFM-Studio/wfm-ide/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron\" --version)",
       "Bash(\"/Users/apple/Desktop/WFM-Studio/wfm-ide/.build/electron/WFM Studio.app/Contents/MacOS/WFM Studio\" --version)",
       "Bash(\"/Users/apple/Desktop/WFM-Studio/wfm-ide/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron\" -e \"console.log\\(process.versions\\)\")",
-      "Bash(mv /Users/apple/Desktop/WFM-Studio/wfm-ide/src/electron-entry.ts /tmp/electron-entry.ts.bak)"
+      "Bash(mv /Users/apple/Desktop/WFM-Studio/wfm-ide/src/electron-entry.ts /tmp/electron-entry.ts.bak)",
+      "Bash(./scripts/dev.sh --smoke-chat-real --no-ide --no-agent-devuis --kill-port)",
+      "Bash(./scripts/dev.sh --smoke-chat-real --no-ide --no-agent-devuis)",
+      "Bash(./scripts/dev.sh --smoke-chat-real --kill-port)",
+      "Bash(./scripts/dev.sh --smoke-chat-real --no-agent-devuis --kill-port)",
+      "Skill(update-config)",
+      "Skill(update-config:*)"
     ],
     "deny": [
       "Bash(rm *)",
       "Bash(rm)"
     ],
     "additionalDirectories": [
-      "/tmp"
+      "/tmp",
+      "/Users/apple/.claude"
     ]
   }
 }

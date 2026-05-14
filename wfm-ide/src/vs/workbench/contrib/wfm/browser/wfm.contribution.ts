@@ -7,6 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Codicon } from '../../../../base/common/codicons.js';
+import { URI } from '../../../../base/common/uri.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { SyncDescriptor } from '../../../../platform/instantiation/common/descriptors.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
@@ -14,6 +15,11 @@ import { Registry } from '../../../../platform/registry/common/platform.js';
 import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
 import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainerLocation } from '../../../common/views.js';
+import { Action2, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
+import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { ExplorerFolderContext } from '../../files/common/files.js';
+import { relativePath } from '../../../../base/common/resources.js';
 import { IWfmAgentClientService } from '../common/wfmAgentClient.js';
 import { WfmAgentClientService } from './wfmAgentClientService.js';
 import { WfmChatViewPane } from './wfmChatViewPane.js';
@@ -53,3 +59,41 @@ const chatViewDescriptor: IViewDescriptor = {
 };
 
 Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([chatViewDescriptor], viewContainer);
+
+//#region --- Explorer 右键菜单: 发送到 WFM 对话 ---
+
+class SendToWfmChatAction extends Action2 {
+	constructor() {
+		super({
+			id: 'wfm.explorer.sendToChat',
+			title: localize2('sendToWfmChat', "发送到 WFM 对话"),
+			f1: false,
+			menu: [{
+				id: MenuId.ExplorerContext,
+				group: 'navigation',
+				order: 30,
+				when: ExplorerFolderContext.negate(),
+			}],
+		});
+	}
+
+	async run(accessor: ServicesAccessor, resource?: URI): Promise<void> {
+		if (!URI.isUri(resource)) {
+			return;
+		}
+		const contextService = accessor.get(IWorkspaceContextService);
+		const agentClient = accessor.get(IWfmAgentClientService);
+
+		const workspace = contextService.getWorkspace();
+		const folder = workspace.folders[0];
+		const relPath = folder ? relativePath(folder.uri, resource) : resource.path;
+
+		await agentClient.prefillChatInput(
+			localize('wfm.chat.prefill.file', "请帮我分析一下这个文件: {0} ", relPath),
+		);
+	}
+}
+
+registerAction2(SendToWfmChatAction);
+
+//#endregion

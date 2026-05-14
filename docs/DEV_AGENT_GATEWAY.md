@@ -1,9 +1,18 @@
 # Uni-Studio Agent 网关 — 研发推进手册
 
-> **用途**：给 AI / 工程师按步推进实现的操作手册。  
-> **规格来源**：`docs/ARCH_AGENT_GATEWAY.md`（契约、硬规范、默认参数、错误码）。  
-> **路线图**：`docs/PLAN.md`（里程碑在项目整体路线中的位置）。  
-> **基本原则**：若本文与 ARCH 冲突，以 ARCH 为准；发现 ARCH 缺漏先补 ARCH，再改代码。
+> ⚠️ **状态：已废弃（DEPRECATED, 2026-05-14）**
+>
+> 本文是旧 `AgentGateway + EngineAdapter` 抽象的研发推进手册，**对话主链路已切到 SDK 原生 runner**。
+> 新方案与迁移步骤见 **[`ARCH_AGENT_SDK_NATIVE.md`](ARCH_AGENT_SDK_NATIVE.md)（§12 迁移步骤）**。
+>
+> 本文保留为历史背景；新的研发任务请直接照 `ARCH_AGENT_SDK_NATIVE.md` 推进。
+
+---
+
+> **历史用途**：给 AI / 工程师按步推进实现的操作手册。
+> **历史规格来源**：`docs/ARCH_AGENT_GATEWAY.md`（**亦已废弃**）。
+> **路线图**：`docs/PLAN.md`（里程碑在项目整体路线中的位置）。
+> **基本原则**（仅适用本文档内部一致性）：若本文与旧 ARCH 冲突，以旧 ARCH 为准；新方案以 `ARCH_AGENT_SDK_NATIVE.md` 为准。
 
 ---
 

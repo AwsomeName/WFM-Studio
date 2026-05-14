@@ -4,11 +4,17 @@
 # 默认行为：后台拉起 (1) wfm-agents 后端 + (2) AgenticX/MAF DevUI + (3) wfm-ide 增量编译 + (4) OSS IDE（Electron 工作台）。
 # 脚本在启动成功后会退出，不会自动杀掉后台进程；停止请用 ./scripts/dev-stop.sh。
 #
+# 后端引擎（2026-05 已切到 openai 兼容上游，详见 docs/PLAN.md §8 与 wfm-agents/README.md）：
+#   - 默认引擎 openai，由 wfm-agents/.env 配置 base_url + model + api_key
+#   - 首次运行：`cp wfm-agents/.env.example wfm-agents/.env` 并填入 WFM_OPENAI_API_KEY
+#   - 默认链路 DashScope + glm-5.1；要切 DeepSeek / 官方 OpenAI 改 .env 即可
+#
 # 用法：
 #   ./scripts/dev.sh                 一键全套（工作台 + 后端 + DevUI）
 #   ./scripts/dev-minimal.sh         最小闭环（等价 --no-agent-devuis，见 docs/PLAN.md §8.3）
 #   ./scripts/dev.sh --no-agent-devuis  不启 18081/18082，仅工作台 + wfm-agents
-#   ./scripts/dev.sh --smoke-chat    后端就绪后对 /v1/chat 做一次 echo 探测（默认关）
+#   ./scripts/dev.sh --smoke-chat       后端就绪后对 /v1/chat 做一次零成本 echo 探测（engine=crewai）
+#   ./scripts/dev.sh --smoke-chat-real  用默认引擎（openai/glm-5.1 等）真调一次 LLM 验证 .env 与 key
 #   ./scripts/dev.sh --no-ide        只起后端 + DevUI + watch（常用于无界面调试）
 #   ./scripts/dev.sh --no-watch      只起后端 + DevUI + IDE（watch 已在另一个终端跑）
 #   ./scripts/dev.sh --no-backend    只起 DevUI + watch + IDE（8765 自行维护）
@@ -56,6 +62,7 @@ LAUNCH_IDE=1
 KILL_PORT=0
 TAIL_LOGS=0
 SMOKE_CHAT=0
+SMOKE_CHAT_REAL=0
 
 # ───────── 颜色 ─────────
 if [[ -t 1 ]]; then
@@ -80,6 +87,7 @@ while [[ $# -gt 0 ]]; do
 		--port)        BACKEND_PORT="${2:?--port 需要一个端口号}"; shift ;;
 		--tail)        TAIL_LOGS=1 ;;
 		--smoke-chat) SMOKE_CHAT=1 ;;
+		--smoke-chat-real) SMOKE_CHAT_REAL=1 ;;
 		-h|--help)     awk 'NR==1{next} /^[^#]/{exit} {sub(/^#\s?/,""); print}' "$0"; exit 0 ;;
 		*) err "未知参数: $1（--help 看支持的参数）"; exit 2 ;;
 	esac
@@ -88,8 +96,8 @@ done
 
 mkdir -p "$LOG_DIR" "$PID_DIR"
 
-if [[ $SMOKE_CHAT -eq 1 && $LAUNCH_BACKEND -eq 0 ]]; then
-	err "--smoke-chat 需要启动后端（勿与 --no-backend 同时使用）"
+if [[ ( $SMOKE_CHAT -eq 1 || $SMOKE_CHAT_REAL -eq 1 ) && $LAUNCH_BACKEND -eq 0 ]]; then
+	err "--smoke-chat / --smoke-chat-real 需要启动后端（勿与 --no-backend 同时使用）"
 	exit 2
 fi
 
@@ -257,6 +265,13 @@ trap on_signal INT TERM
 
 # ───────── 1. 后端 ─────────
 if [[ $LAUNCH_BACKEND -eq 1 ]]; then
+	# .env 检查（默认引擎 openai 没 key 会 400；提示但不阻断，方便 --smoke-chat 走 crewai echo）
+	if [[ ! -f "$AGENTS_DIR/.env" ]]; then
+		warn "未找到 $AGENTS_DIR/.env"
+		warn "默认引擎为 openai，缺 WFM_OPENAI_API_KEY 时所有真模型调用都会返回 400。"
+		warn "首次配置：cp $AGENTS_DIR/.env.example $AGENTS_DIR/.env && \$EDITOR $AGENTS_DIR/.env"
+	fi
+
 	log "同步后端依赖 (uv sync --extra dev) ..."
 	( cd "$AGENTS_DIR" && uv sync --extra dev ) >>"$AGENTS_LOG" 2>&1 \
 		|| { err "uv sync 失败，详见 $AGENTS_LOG"; tail -n 40 "$AGENTS_LOG" >&2; exit 1; }
@@ -290,11 +305,13 @@ if [[ $LAUNCH_BACKEND -eq 1 ]]; then
 		exit 1
 	fi
 	ok "后端就绪 (pid=$BE_PID)"
+
+	# --smoke-chat：零成本 echo 探针（强制 engine=crewai，走 CrewAIEngine 的纯字符串拼接，不调真模型）
 	if [[ $SMOKE_CHAT -eq 1 ]]; then
 		SMOKE_WS="$(mktemp -d)"
 		SMOKE_JSON="$(mktemp)"
 		SMOKE_OUT="$(mktemp)"
-		printf '{"workspace_root":"%s","message":"ping"}' "$SMOKE_WS" >"$SMOKE_JSON"
+		printf '{"workspace_root":"%s","message":"ping","engine":"crewai"}' "$SMOKE_WS" >"$SMOKE_JSON"
 		http_code=""
 		if ! http_code="$(curl -sS --max-time 20 -o "$SMOKE_OUT" -w "%{http_code}" \
 				-X POST "http://${BACKEND_HOST}:${BACKEND_PORT}/v1/chat" \
@@ -305,12 +322,43 @@ if [[ $LAUNCH_BACKEND -eq 1 ]]; then
 		rm -f "$SMOKE_JSON"
 		rm -rf "$SMOKE_WS"
 		if [[ "$http_code" == "200" ]]; then
-			ok "smoke: POST /v1/chat echo 成功 (http=$http_code)"
+			ok "smoke: POST /v1/chat echo 成功 (http=$http_code, engine=crewai)"
 			rm -f "$SMOKE_OUT"
 		else
 			err "smoke: POST /v1/chat 失败 (http=$http_code)，响应体："
 			cat "$SMOKE_OUT" >&2 || true
 			rm -f "$SMOKE_OUT"
+			exit 1
+		fi
+	fi
+
+	# --smoke-chat-real：用默认引擎（openai/glm-5.1 等）真调一次 LLM；验证 .env 与 API key
+	if [[ $SMOKE_CHAT_REAL -eq 1 ]]; then
+		SMOKE_WS="$(mktemp -d)"
+		SMOKE_JSON="$(mktemp)"
+		SMOKE_OUT="$(mktemp)"
+		printf '{"workspace_root":"%s","message":"用一句话告诉我你是谁"}' "$SMOKE_WS" >"$SMOKE_JSON"
+		http_code=""
+		if ! http_code="$(curl -sS --max-time 90 -o "$SMOKE_OUT" -w "%{http_code}" \
+				-X POST "http://${BACKEND_HOST}:${BACKEND_PORT}/v1/chat" \
+				-H "Content-Type: application/json" \
+				--data-binary @"$SMOKE_JSON")"; then
+			http_code="000"
+		fi
+		rm -f "$SMOKE_JSON"
+		rm -rf "$SMOKE_WS"
+		if [[ "$http_code" == "200" ]]; then
+			ok "smoke-real: POST /v1/chat 真模型回包 (http=$http_code)"
+			log "  响应预览: $(head -c 240 "$SMOKE_OUT")"
+			rm -f "$SMOKE_OUT"
+		else
+			err "smoke-real: POST /v1/chat 失败 (http=$http_code)，响应体："
+			cat "$SMOKE_OUT" >&2 || true
+			rm -f "$SMOKE_OUT"
+			err "排查提示："
+			err "  1) 检查 $AGENTS_DIR/.env 是否存在并填了 WFM_OPENAI_API_KEY"
+			err "  2) 检查 WFM_OPENAI_BASE_URL / WFM_OPENAI_MODEL 是否匹配上游"
+			err "  3) 看 $AGENTS_LOG 的尾部错误堆栈"
 			exit 1
 		fi
 	fi
@@ -472,7 +520,23 @@ log ""
 log "最小闭环验收（docs/PLAN.md §8.3 Step D）："
 log "  1) OSS 窗口内 Cmd+O 打开本地文件夹"
 log "  2) 打开侧边 WFM 聊天面板 → 发送消息 → 应看到回复与工作区路径"
-log "  3) （可选终端）curl POST /v1/chat 见 PLAN §8.3 Step A"
+log "  3) （可选终端）curl POST /v1/chat 见下方"
+
+if [[ $LAUNCH_BACKEND -eq 1 ]]; then
+	log ""
+	log "终端直接测试 chat（拷贝粘贴可用）："
+	log "  WS=\$(pwd)  # 或任意已存在目录"
+	log "  curl -s -X POST http://${BACKEND_HOST}:${BACKEND_PORT}/v1/chat \\"
+	log "    -H 'Content-Type: application/json' \\"
+	log "    -d \"{\\\"workspace_root\\\":\\\"\$WS\\\",\\\"message\\\":\\\"用一句话告诉我你是谁\\\"}\" \\"
+	log "    | python3 -m json.tool"
+	log ""
+	log "  // 强制走 CrewAI 的零成本 echo（不耗 token）："
+	log "  curl -s -X POST http://${BACKEND_HOST}:${BACKEND_PORT}/v1/chat \\"
+	log "    -H 'Content-Type: application/json' \\"
+	log "    -d \"{\\\"workspace_root\\\":\\\"\$WS\\\",\\\"message\\\":\\\"ping\\\",\\\"engine\\\":\\\"crewai\\\"}\""
+fi
+
 if [[ $LAUNCH_AGENT_DEVUIS -eq 0 ]]; then
 	log ""
 	log "提示：本会话未启动 DevUI (${AGENTICX_PORT}/${MAF_PORT})；若要 engine=maf/agenticx 请加参数：./scripts/dev.sh （含默认 DevUI）"

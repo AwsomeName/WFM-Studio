@@ -1,8 +1,19 @@
 # CAD 选区审图与 AI 反标 — 方案摘要
 
-> **目的**：把「像 HTML XPath 一样复制结构身份信息 → 喂给大模型 →（可选）截图/局部审图 →（可选）审图意见回标到视图」的能力写成可落地的设计说明。  
-> **关联**：[ARCH_CAD_REVIEW.md](ARCH_CAD_REVIEW.md)（v0.2 管线）、[TASK_SCENARIOS.md](TASK_SCENARIOS.md)（用户故事 4）。  
+> **目的**：把「像 HTML XPath 一样复制结构身份信息 → 喂给大模型 →（可选）截图/局部审图 →（可选）审图意见回标到视图」的能力写成可落地的设计说明（**回答"怎么做"**）。
+> **关联**：
+> - [ARCH_AGENT_SDK_NATIVE.md](ARCH_AGENT_SDK_NATIVE.md) — 对话后端正式规格；L1 选区落到 `CadReviewRecipe` 上，沿用其 `extras.selection`/`extras.screenshot_png_b64` 字段口径
+> - [CAD_AI_FEASIBILITY.md](CAD_AI_FEASIBILITY.md) — **效果可行性与能力边界**（回答"能做到什么效果"），含期望管理与优先级建议
+> - [ARCH_CAD_REVIEW.md](ARCH_CAD_REVIEW.md) — v0.2 当前管线
+> - [TASK_SCENARIOS.md](TASK_SCENARIOS.md) — 用户故事 4
+>
 > **状态**：本文档描述 **Phase 3（L1–L3）** 目标设计；实现进度以代码与 `ARCH_CAD_REVIEW.md` 为准。
+>
+> **2026-05-14 增量**：后端实现路径换骨——`/v1/chat` 不再过 AgentGateway / EngineAdapter，而是由 `agent/runner.py` 直连 `openai-python`。**本文设计意图不变**，只是落地组件名调整：
+> - 「选区 ezdxf 摘要」仍在 `wfm-agents/wfm_agents/cad/parser.py`
+> - 「cad_review_prompt + 多模态」从 `cad/recipes.py` 迁到 `agent/recipes/cad_review.py`（`CadReviewRecipe`）
+> - 「LLM 调用 + 流式」由新 runner 统一负责（`responses.parse` / `responses.stream`）
+> - 数据流图（§4）中 "POST /v1/chat" → "cad_review_prompt + 多模态" → "LLM" 三个节点对应到新规格的 §8
 
 ---
 

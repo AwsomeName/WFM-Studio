@@ -43,8 +43,10 @@ WFM/
 ├── docs/                               # 项目文档
 │   ├── PRD.md                          # 产品需求文档
 │   ├── PLAN.md                         # 本文件
-│   ├── ARCH_AGENT_GATEWAY.md           # Agent 网关 / HTTP 契约 / Tool+MCP / 多引擎（规格）
-│   ├── DEV_AGENT_GATEWAY.md            # Agent 网关研发推进手册（AI / 工程师按步执行）
+│   ├── ARCH_AGENT_SDK_NATIVE.md        # ★ 对话后端正式规格（SDK 原生 runner，2026-05-14）
+│   ├── DEV_AGENT_SDK_NATIVE.md         # ★ 上述规格的研发推进手册（5 阶段、按步执行）
+│   ├── ARCH_AGENT_GATEWAY.md           # [DEPRECATED] 旧 Agent 网关规格，保留为历史背景
+│   ├── DEV_AGENT_GATEWAY.md            # [DEPRECATED] 旧 Agent 网关研发手册，保留为历史背景
 │   ├── DEV_SETUP.md                    # 开发环境与启动基线（统一口径）
 │   ├── CREWAI_UPSTREAM.md              # CrewAI：git subtree + 本地 path 依赖
 │   └── CREWAI_PATCHES.md               # 对 CrewAI 上游侵入式改动（升级对账）
@@ -93,10 +95,12 @@ WFM/
 │   ├── config/mcp_servers.yaml         # MCP 定义（可选；见 `wfm_agents/tools/mcp/`）
 │   └── wfm_agents/
 │       ├── server.py                   # FastAPI 入口（`uvicorn wfm_agents.server:app`）
-│       ├── routes/                     # HTTP 路由
-│       ├── gateway/                    # AgentGateway + models + session + stream_events
-│       ├── tools/                      # ToolGateway + builtin + MCP + pptx_provider + proposal_provider（v0.7 新增）
-│       ├── engines/                    # Engine adapters: crewai / anthropic / maf / agenticx
+│       ├── routes/                     # HTTP 路由（薄层）
+│       ├── agent/                      # config.py 仍用（agent_v2 依赖）；其余已删，见 __init__.py deprecated 提示
+│       ├── agent_v2/                   # ★ 当前运行时：OpenAI Agents SDK（agents / tools / runner / sse）
+│       ├── cad/                        # CAD 摘要 / 审图 schema（被 agent/recipes/cad_review.py 调用）
+│       ├── gateway/                    # [DEPRECATED] 旧 AgentGateway 抽象，保留兜底，不再被对话路径调用
+│       ├── engines/                    # [DEPRECATED] 旧 EngineAdapter（crewai / anthropic / maf / agenticx）
 │       └── observability/              # trace + error codes
 │
 ├── wfm-resources/                      # ═══ 模板 & 文案库 & 素材 ═══
@@ -408,7 +412,9 @@ registerAction2(class extends Action2 {
 
 **后端：同步搭建 wfm-agents**
 
-HTTP 与 Agent 网关的单一规格见 **`docs/ARCH_AGENT_GATEWAY.md`**（含 `/v1/chat` 与 **`/v1/chat/stream`**、Tool Gateway、MCP 聚合、多引擎适配）；**实现推进步骤** 见 **`docs/DEV_AGENT_GATEWAY.md`**（M0→M6 里程碑与验收清单，AI 可直接按步执行）。
+HTTP 与对话后端的单一规格见 **`docs/ARCH_AGENT_SDK_NATIVE.md`**（OpenAI Agents SDK runner：`/v1/chat`、`/v1/chat/stream`、流式回流、工具循环；**agent_v2 实现**）。
+
+> 2026-05-14 迁移记录：自研 SDK-native runner（`agent/runner.py`）→ OpenAI Agents SDK（`agent_v2/runner.py`）。旧 `agent/` 除 `config.py` 外已全部删除。详见 `docs/WHY_AGENTS_SDK.md`。
 
 ```bash
 cd /Users/lc/Desktop/WFM
@@ -420,7 +426,7 @@ uv sync
 uv run uvicorn wfm_agents.server:app --reload --port 8765
 ```
 
-**验证：** WFM Studio 右侧面板能和 AI 对话；**流式 SSE** 与同步接口行为与 `ARCH_AGENT_GATEWAY.md` 一致；CrewAI 集成后由本地 `third_party/crewai` 提供框架实现。
+**验证：** WFM Studio 右侧面板能和 AI 对话；**流式 SSE** 与同步接口行为一致（SSE wire format 未变）；`engine` / `mode` 字段已废弃，前端零改动。
 
 ### 4.5 Phase 4 — Task Flow 面板 (1 周)
 
@@ -498,14 +504,17 @@ PPT 编辑采用 VS Code **CustomEditor API** + Webview 方案，整体生成与
 
 | 引擎 | 当前集成深度 | 代码位置 |
 |------|------------|----------|
-| CrewAI | 浅——直接用 `crewai_runtime.py`，**不经过 ToolHandle** | `third_party/agents/crewai/` |
-| Anthropic | **深——完整 ToolHandle 多轮 tool-use loop** | `third_party/anthropics/anthropic-sdk-python/` |
+| **OpenAI Agents SDK** | ★ 当前主引擎——`agent_v2/` 全权接管对话 | `third_party/agents/openai-agents-python/` |
+| CrewAI | 旧——`engine=crewai` 路径已不再被 agent_v2 使用 | `third_party/agents/crewai/` |
+| Anthropic | 旧——`engine=anthropic` 路径已不再被 agent_v2 使用 | `third_party/anthropics/anthropic-sdk-python/` |
 | MAF | 最浅——DevUI HTTP proxy | `third_party/agents/maf/` |
 | AgenticX | 最浅——DevUI HTTP proxy | `third_party/agents/agenticx/` |
 
+> 注：`engine` 字段已废弃。agent_v2 通过 `OpenAIProvider` 统一走 OpenAI Chat Completions 兼容接口。
+
 5 个评估场景：基础对话 / 文件读取 / PPT 大纲 / 标书完整生成 / 错误恢复
 
-关键评估维度：ToolHandle 集成深度、流式粒度、多步编排能力、可定制性
+关键评估维度：Agent SDK 集成深度、流式粒度、多步编排能力、可定制性
 
 **产出**：选定主引擎 + 备选引擎，记录于 `docs/EVAL_REPORT.md`
 
@@ -658,7 +667,7 @@ git checkout -b feat/doc-generation main
 
 合并顺序：backend-eval → doc-generation → ppt-editor → uni-studio-brand
 
-### 8.3 Agent 网关里程碑（`docs/DEV_AGENT_GATEWAY.md` M0→M6）
+### 8.3 Agent 后端里程碑（`docs/DEV_AGENT_GATEWAY.md` M0→M6 + agent_v2 迁移）
 
 与 `docs/ARCH_AGENT_GATEWAY.md` 契约对齐的实现进度（在此勾选，避免与 Step 2 子项混淆）：
 
@@ -669,6 +678,14 @@ git checkout -b feat/doc-generation main
 - [x] **M4** MCP 聚合 + reload（`wfm_agents/config/mcp_servers.yaml`、`mcp.*`、`POST /v1/admin/mcp/reload`；pytest `tests/test_mcp_m4.py`）
 - [x] **M5** `agenticx` in-tree 最小 `run_turn`/`stream_turn`；`maf` DevUI 适配
 - [ ] **M6** Eval harness（🔄 in-progress，`feat/backend-eval` 分支）
+
+**2026-05-14 agent_v2 迁移**（✅ 已完成）：
+
+- [x] Step 2 PoC：`agent_v2/` 并行搭建，验证 3 条路径（普通聊天、工具调用、CAD 审图）
+- [x] Step 3 切流量：`/v1/chat`、`/v1/chat/stream`、`/v1/cad/review` 全部切到 `agent_v2.runner`
+- [x] 删旧代码：`agent/runner.py`、`client.py`、`events.py`、`fallback.py`、`session_store.py`、`recipes/`、`tools/` 已删除
+- [x] 测试修复：75 passed, 0 failed
+- [x] 文档更新：`docs/WHY_AGENTS_SDK.md`、`docs/ARCH_AGENT_SDK_NATIVE.md`、`docs/DEV_AGENT_SDK_NATIVE.md`
 
 ### 8.4 Step 2 —— 最小闭环详细拆解（✅ 已完成，保留供参考）
 
@@ -696,7 +713,8 @@ wfm-agents/
 
 - 所有涉及文件 I/O 的接口必须带 `workspace_root` 参数
 - 服务端统一用 `Path.resolve().is_relative_to(workspace_root)` 做越界校验
-- 默认 `echo` 不调用 LLM；CrewAI 经 PyPI 或未来 `third_party/crewai` path 接入（见 `docs/CREWAI_UPSTREAM.md`）
+- 默认引擎自 2026-05 起走 **OpenAI Agents SDK**（`agent_v2/`），上游为 DashScope/GLM-5.1 等 OpenAI Chat Completions 兼容服务。`engine` / `mode` 字段已废弃（接受但忽略）。配置详见 [`wfm-agents/.env.example`](../wfm-agents/.env.example)
+- 迁移记录见 `docs/WHY_AGENTS_SDK.md`
 - 默认端口 `8765`（避开 VS Code 常用端口）
 
 **验收**：

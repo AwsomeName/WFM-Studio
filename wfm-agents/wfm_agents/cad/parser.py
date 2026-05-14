@@ -26,6 +26,8 @@ _MAX_TEXTS = 200
 _MAX_DIMS = 200
 _MAX_LAYERS_DETAIL = 200
 _MAX_BLOCKS = 200
+_MAX_STYLES = 50         # text styles / dim styles / linetypes 各自上限
+_MAX_LAYOUTS = 20
 
 #: 头部里我们关心的 DXF 系统变量（其它字段噪声大，跳过）。
 _HEADER_KEYS_OF_INTEREST: tuple[str, ...] = (
@@ -123,30 +125,41 @@ def _extract_header(doc: Any) -> dict[str, Any]:
     return header_summary
 
 
-def _scan_entities(doc: Any) -> tuple[
-    dict[str, dict[str, int]],
-    list[dict[str, Any]],
-    list[dict[str, Any]],
-]:
-    """遍历 modelspace，返回 (按图层×类型计数, 文字, 标注)。"""
-    by_layer_type: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    texts: list[dict[str, Any]] = []
-    dimensions: list[dict[str, Any]] = []
+def _scan_entities_in(
+    container: Any,
+    *,
+    by_layer_type: dict[str, dict[str, int]],
+    texts: list[dict[str, Any]],
+    dimensions: list[dict[str, Any]],
+    text_total: list[int],
+    dim_total: list[int],
+) -> None:
+    """Scan one DXF entity container (modelspace / one paperspace layout).
 
-    msp = doc.modelspace()
-    for entity in msp:
+    Mutates the four collectors in-place. Counters in ``text_total`` /
+    ``dim_total`` track total entities seen *before* truncation so the
+    top-level ``truncated`` field can report how many were dropped.
+    """
+    for entity in container:
         etype = entity.dxftype()
         layer = str(_safe_attr(entity.dxf, "layer", "0"))
         by_layer_type[layer][etype] += 1
 
-        if etype in {"TEXT", "MTEXT"} and len(texts) < _MAX_TEXTS:
+        handle = str(_safe_attr(entity.dxf, "handle", "") or "") or None
+
+        if etype in {"TEXT", "MTEXT"}:
+            text_total[0] += 1
+            if len(texts) >= _MAX_TEXTS:
+                continue
             content = ""
             if etype == "MTEXT":
                 content = str(_safe_attr(entity, "text", "")).strip()
                 if not content:
-                    content = str(_safe_attr(entity, "plain_text", lambda: "")()
-                                   if callable(_safe_attr(entity, "plain_text", None))
-                                   else "")
+                    content = str(
+                        _safe_attr(entity, "plain_text", lambda: "")()
+                        if callable(_safe_attr(entity, "plain_text", None))
+                        else ""
+                    )
             else:
                 content = str(_safe_attr(entity.dxf, "text", "")).strip()
             if not content:
@@ -154,17 +167,22 @@ def _scan_entities(doc: Any) -> tuple[
             position = _format_point(_safe_attr(entity.dxf, "insert", None))
             texts.append(
                 {
+                    "handle": handle,
                     "type": etype,
                     "layer": layer,
                     "text": content,
                     "position": position,
                 }
             )
-        elif etype == "DIMENSION" and len(dimensions) < _MAX_DIMS:
+        elif etype == "DIMENSION":
+            dim_total[0] += 1
+            if len(dimensions) >= _MAX_DIMS:
+                continue
             measurement = _safe_attr(entity.dxf, "actual_measurement", None)
             text_override = str(_safe_attr(entity.dxf, "text", "") or "").strip()
             dimensions.append(
                 {
+                    "handle": handle,
                     "layer": layer,
                     "measurement": float(measurement)
                     if isinstance(measurement, (int, float))
@@ -174,18 +192,113 @@ def _scan_entities(doc: Any) -> tuple[
                 }
             )
 
-    # defaultdict -> 普通 dict，便于序列化
+
+def _scan_entities(doc: Any) -> tuple[
+    dict[str, dict[str, int]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, dict[str, int]],
+    list[dict[str, Any]],
+]:
+    """Walk modelspace + paperspace layouts.
+
+    Returns a 5-tuple:
+    ``(by_layer_type, texts, dimensions, totals, layouts)``
+
+    * ``by_layer_type`` includes paperspace entities too (they share layers
+      with modelspace in DXF semantics).
+    * ``totals`` is ``{"texts": {"kept", "total"}, "dims": {...}}`` so the
+      top-level summary can expose truncation info.
+    * ``layouts`` is per-paperspace ``{"name", "texts", "dims"}`` counts.
+    """
+    by_layer_type: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    texts: list[dict[str, Any]] = []
+    dimensions: list[dict[str, Any]] = []
+    text_total = [0]
+    dim_total = [0]
+
+    _scan_entities_in(
+        doc.modelspace(),
+        by_layer_type=by_layer_type,
+        texts=texts,
+        dimensions=dimensions,
+        text_total=text_total,
+        dim_total=dim_total,
+    )
+
+    layouts: list[dict[str, Any]] = []
+    layout_names_fn = _safe_attr(doc, "layout_names", None)
+    names: list[str] = []
+    if callable(layout_names_fn):
+        try:
+            names = [str(n) for n in layout_names_fn()]
+        except Exception:  # pragma: no cover - upstream variance
+            names = []
+    for name in names:
+        if name == "Model":
+            continue
+        if len(layouts) >= _MAX_LAYOUTS:
+            break
+        try:
+            layout = doc.layouts.get(name)
+        except Exception:  # pragma: no cover - upstream variance
+            continue
+        before_t, before_d = text_total[0], dim_total[0]
+        _scan_entities_in(
+            layout,
+            by_layer_type=by_layer_type,
+            texts=texts,
+            dimensions=dimensions,
+            text_total=text_total,
+            dim_total=dim_total,
+        )
+        layouts.append(
+            {
+                "name": name,
+                "texts": text_total[0] - before_t,
+                "dims": dim_total[0] - before_d,
+            }
+        )
+
+    totals = {
+        "texts": {"kept": len(texts), "total": text_total[0]},
+        "dims": {"kept": len(dimensions), "total": dim_total[0]},
+    }
     return (
         {layer: dict(types) for layer, types in by_layer_type.items()},
         texts,
         dimensions,
+        totals,
+        layouts,
     )
+
+
+def _extract_named_table(table: Any, *, attr: str = "name") -> list[str]:
+    """Generic ``Iterable[Entity] → list[name]`` for text/dim styles + linetypes."""
+    out: list[str] = []
+    if table is None:
+        return out
+    try:
+        iterable = list(table)
+    except TypeError:  # pragma: no cover - upstream variance
+        return out
+    for entry in iterable:
+        try:
+            name = str(_safe_attr(entry.dxf, attr, "") or "")
+        except Exception:  # pragma: no cover
+            continue
+        if not name or name.startswith("*"):
+            continue
+        out.append(name)
+        if len(out) >= _MAX_STYLES:
+            break
+    return out
 
 
 def _build_summary(doc: Any, file_meta: dict[str, Any]) -> dict[str, Any]:
     """已加载的 ezdxf Document -> 摘要 dict。供 readfile / read 流共享。"""
     layers = _extract_layers(doc)
-    by_layer_type, texts, dimensions = _scan_entities(doc)
+    by_layer_type, texts, dimensions, totals, layouts = _scan_entities(doc)
 
     block_names: list[str] = []
     for block in doc.blocks:  # type: ignore[attr-defined]
@@ -198,6 +311,23 @@ def _build_summary(doc: Any, file_meta: dict[str, Any]) -> dict[str, Any]:
             break
 
     layer_counts = {layer: sum(types.values()) for layer, types in by_layer_type.items()}
+
+    text_styles = _extract_named_table(_safe_attr(doc, "styles", None))
+    dim_styles = _extract_named_table(_safe_attr(doc, "dimstyles", None))
+    linetypes = _extract_named_table(_safe_attr(doc, "linetypes", None))
+
+    truncated = {
+        "texts": totals["texts"],
+        "dims": totals["dims"],
+        "layers_detail": {
+            "kept": min(len(layers), _MAX_LAYERS_DETAIL),
+            "total": len(layers),
+        },
+        "blocks": {"kept": len(block_names), "total": len(block_names)},
+        "text_styles": {"kept": len(text_styles), "total": len(text_styles)},
+        "dim_styles": {"kept": len(dim_styles), "total": len(dim_styles)},
+        "linetypes": {"kept": len(linetypes), "total": len(linetypes)},
+    }
 
     return {
         "file": file_meta,
@@ -217,11 +347,18 @@ def _build_summary(doc: Any, file_meta: dict[str, Any]) -> dict[str, Any]:
         "texts": texts,
         "dimensions": dimensions,
         "block_names": block_names,
+        "text_styles": text_styles,
+        "dim_styles": dim_styles,
+        "linetypes": linetypes,
+        "layouts": layouts,
+        "truncated": truncated,
         "limits": {
             "max_texts": _MAX_TEXTS,
             "max_dims": _MAX_DIMS,
             "max_layers_detail": _MAX_LAYERS_DETAIL,
             "max_blocks": _MAX_BLOCKS,
+            "max_styles": _MAX_STYLES,
+            "max_layouts": _MAX_LAYOUTS,
         },
     }
 

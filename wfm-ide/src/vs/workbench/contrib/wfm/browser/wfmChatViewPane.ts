@@ -78,6 +78,14 @@ export class WfmChatViewPane extends ViewPane {
 				originLabel: submission.originLabel,
 			});
 		}));
+
+		// 订阅预填事件（Explorer 右键「发送到 WFM 对话」等）。
+		this._register(this.agentClient.onExternalChatPrefill(text => {
+			if (this.inputEl) {
+				this.inputEl.value = text;
+				this.inputEl.focus();
+			}
+		}));
 	}
 
 	protected override renderBody(container: HTMLElement): void {

@@ -171,7 +171,16 @@ class TestChatExtraction:
 # --- TestChatRouting (HTTP, echo mode echoes the rewritten prompt) ------------
 
 
+_LEGACY_CAD_ECHO_SKIP_REASON = (
+    "Pinned the legacy crewai echo template that printed cad_review_prompt "
+    "verbatim. After D2 下午 CAD review goes through CadReviewRecipe + the "
+    "SDK-native runner; equivalent coverage now lives in "
+    "tests/test_cad_review_recipe.py."
+)
+
+
 class TestChatRouting:
+    @pytest.mark.skip(reason=_LEGACY_CAD_ECHO_SKIP_REASON)
     def test_echo_chat_includes_summary_when_dxf_referenced(
         self, client: TestClient, tmp_path: Path
     ) -> None:
@@ -183,6 +192,8 @@ class TestChatRouting:
                 "workspace_root": str(tmp_path),
                 "message": "审一下 drawings/foo.dxf",
                 "mode": "echo",
+                # 显式 crewai 走 echo 模板（默认引擎自 2026-05 已切到 openai）
+                "engine": "crewai",
             },
         )
         assert resp.status_code == 200, resp.text
@@ -195,29 +206,52 @@ class TestChatRouting:
         assert "HELLO" in content
 
     def test_chat_falls_back_when_dxf_not_in_workspace(
-        self, client: TestClient, tmp_path: Path
+        self,
+        client: TestClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # User mentions a .dxf that does NOT exist; should NOT 422 nor 4xx.
-        # Falls back to plain echo.
+        """Non-existent ``.dxf`` token must fall back to plain chat (no 422/4xx).
+
+        Post agent_v2 migration the fallback goes through
+        :func:`Runner.run_sync` rather than the legacy gateway,
+        so we mock the Agents SDK ``Runner.run_sync``.
+        """
+        from types import SimpleNamespace
+
+        import agents
+
+        monkeypatch.setenv("WFM_OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("WFM_AGENT_MODEL", "gpt-test")
+
+        monkeypatch.setattr(
+            agents.Runner,
+            "run_sync",
+            lambda **_kw: SimpleNamespace(
+                final_output="收到，但工作区里没有 imaginary.dxf。",
+                new_items=[],
+                raw_responses=[],
+            ),
+        )
+
         resp = client.post(
             "/v1/chat",
             json={
                 "workspace_root": str(tmp_path),
                 "message": "审一下 imaginary.dxf",
-                "mode": "echo",
             },
         )
         assert resp.status_code == 200, resp.text
         content = resp.json()["content"]
-        # Plain echo template, no review scaffolding.
+        # CAD review prompt scaffolding never reaches the model — fallback path.
         assert "DXF 摘要" not in content
-        assert "imaginary.dxf" in content
 
 
 # --- TestChatInlineDxfText (v0.2: 浏览器 in-browser 解析后直接 POST 上来) ----
 
 
 class TestChatInlineDxfText:
+    @pytest.mark.skip(reason=_LEGACY_CAD_ECHO_SKIP_REASON)
     def test_inline_dxf_text_triggers_review(
         self, client: TestClient, tmp_path: Path
     ) -> None:
@@ -228,6 +262,7 @@ class TestChatInlineDxfText:
                 "workspace_root": str(tmp_path),
                 "message": "请审一下这张图",
                 "mode": "echo",
+                "engine": "crewai",
                 "dxf_text": _MINIMAL_DXF,
                 "dxf_source_uri": "file:///fake/foo.dwg",
             },
@@ -241,6 +276,7 @@ class TestChatInlineDxfText:
         # source_label 应当反映在摘要里
         assert "file:///fake/foo.dwg" in content
 
+    @pytest.mark.skip(reason=_LEGACY_CAD_ECHO_SKIP_REASON)
     def test_inline_dxf_text_takes_priority_over_message_token(
         self, client: TestClient, tmp_path: Path
     ) -> None:
@@ -257,6 +293,7 @@ class TestChatInlineDxfText:
                 "workspace_root": str(tmp_path),
                 "message": "审一下 decoy.dxf",
                 "mode": "echo",
+                "engine": "crewai",
                 "dxf_text": _MINIMAL_DXF,
             },
         )
@@ -276,6 +313,7 @@ class TestChatInlineDxfText:
                 "workspace_root": str(tmp_path),
                 "message": "随便聊聊",
                 "mode": "echo",
+                "engine": "crewai",
                 "dxf_text": "   \n\t  ",
             },
         )
@@ -290,6 +328,7 @@ class TestChatInlineDxfText:
                 "workspace_root": str(tmp_path),
                 "message": "审图",
                 "mode": "echo",
+                "engine": "crewai",
                 "dxf_text": "this is not a dxf at all",
             },
         )

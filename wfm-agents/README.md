@@ -1,24 +1,53 @@
 # wfm-agents
 
-WFM Studio 的 Agent 后端服务（FastAPI、Agent 网关、工具与 MCP 聚合）。
+WFM Studio 的 Agent 后端服务（FastAPI + OpenAI Agents SDK）。
 
-## 依赖与 CrewAI
+## 架构
 
-当前 **CrewAI 默认从 PyPI 安装**（`pyproject.toml` 的 `crewai`）。若需把上游 fork 以 **path / git subtree** 管理，见仓库根 `docs/CREWAI_UPSTREAM.md` 与 `docs/CREWAI_PATCHES.md`；勿在业务代码中写死 `wfm-agents-ref` 等本地未跟踪目录。
+自 **2026-05** 起，对话后端基于 **OpenAI Agents SDK**（`wfm_agents/agent_v2/`），不再使用自研 runner。迁移原因见 [`docs/WHY_AGENTS_SDK.md`](../docs/WHY_AGENTS_SDK.md)。
+
+```
+wfm_agents/
+├── agent/
+│   ├── __init__.py     # deprecated，仅保留模块声明
+│   └── config.py       # 环境变量加载（agent_v2 仍使用）
+├── agent_v2/           # ★ 当前运行时
+│   ├── agents.py       # Agent 定义：plain_chat_agent, cad_review_agent
+│   ├── context.py      # WfmAgentContext(workspace_root)
+│   ├── tools.py        # @function_tool 包装的 6 个内置工具
+│   ├── sse.py          # SSE 事件编码（wire format 与旧版一致）
+│   └── runner.py       # run_chat() / run_chat_stream() — 路由层唯一入口
+├── cad/                # DXF 解析 / 审图 schema
+├── gateway/            # [DEPRECATED] 旧 AgentGateway，保留兜底
+├── engines/            # [DEPRECATED] 旧 EngineAdapter
+├── routes/             # HTTP 薄路由
+└── server.py           # FastAPI 入口
+```
+
+### 环境变量
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `WFM_OPENAI_API_KEY` 或 `OPENAI_API_KEY` | API Key（必填） | — |
+| `WFM_OPENAI_BASE_URL` | 上游 base URL；为空则用 OpenAI 官方 | （空） |
+| `WFM_AGENT_MODEL` | 模型 ID（如 `glm-5.1` / `qwen-plus` / `gpt-4o-mini`） | `gpt-4o-mini` |
+| `WFM_AGENT_TEMP` | 温度 | `0.3` |
+| `WFM_AGENT_MAX_TOOL_ROUNDS` | 工具循环上限 | `16` |
+| `WFM_AGENT_API` | `responses` 或 `chat`（上游能力探测） | `chat` |
+
+`engine` / `mode` 请求字段已废弃（接受但忽略，打 warning）。`WFM_DEFAULT_ENGINE` / `WFM_CHAT_MODE` 等旧环境变量不再生效。
+
+启动时自动加载 `wfm-agents/.env`（缺包静默跳过，shell env 优先于 .env）。范例见 [`.env.example`](.env.example)。
 
 ## 运行
 
-包名为 **`wfm_agents`**（下划线），**uvicorn 入口**：
-
 ```bash
-cd /Users/lc/Desktop/WFM/wfm-agents
-uv sync --extra dev --extra anthropic
+cp .env.example .env  # 首次：填入 WFM_OPENAI_API_KEY 等
+uv sync --extra dev
 uv run uvicorn wfm_agents.server:app --reload --host 127.0.0.1 --port 8765
 ```
 
-仅需在生产环境启用 `engine=anthropic` 且希望**减小镜像**时，可单独安装 `wfm-agents[anthropic]`（不把 `anthropic` 带进默认主依赖）。开发者运行 `uv sync --extra dev` 时已包含 `anthropic`，便于 `pytest`。
-
-仓库根亦可用：`./scripts/dev.sh`（默认含 DevUI）或 **`./scripts/dev-minimal.sh`（最小闭环，见 docs/PLAN §8.3）**；先停再起：`./scripts/wfm-up.sh`。日志在 `.wfm-dev/logs/`。
+仓库根亦可用：`./scripts/dev.sh`（默认含 DevUI）或 **`./scripts/dev-minimal.sh`（最小闭环）**；先停再起：`./scripts/wfm-up.sh`。日志在 `.wfm-dev/logs/`。
 
 ## 接口
 
@@ -27,46 +56,19 @@ uv run uvicorn wfm_agents.server:app --reload --host 127.0.0.1 --port 8765
 | Method | Path | 说明 |
 |--------|------|------|
 | GET  | `/v1/health` | 健康检查 |
-| POST | `/v1/chat` | 对话（默认 echo；`engine` 可切 `crewai` / `anthropic` / `maf` / `agenticx` 等） |
+| POST | `/v1/chat` | 对话（agent_v2 runner；`engine`/`mode` 字段已废弃） |
 | POST | `/v1/chat/stream` | SSE 流式 |
+| POST | `/v1/cad/review` | CAD 审图（同步） |
+| POST | `/v1/cad/review/stream` | CAD 审图（SSE 流式） |
 | POST | `/v1/workspace/write` | 工作区内写文件 |
 | POST | `/v1/workspace/read` | 工作区内读文件 |
-| POST | `/v1/admin/mcp/reload` | 重载 `wfm_agents/config/mcp_servers.yaml` 与 MCP 工具列表（本机或 `X-WFM-Internal: 1`） |
+| POST | `/v1/admin/mcp/reload` | 重载 MCP 工具列表 |
 
-## 手工与自动化验收
+## 验收
 
-- 快速见 `docs/PLAN.md` §8.3（Step A/D curl 与 `pytest`）
-- 契约与错误码见 `docs/ARCH_AGENT_GATEWAY.md`
-- 三引擎烟雾测试：`./scripts/engines-smoke.sh`（可选参数：`workspace_root`）
-
-## 可选依赖
-
-- `wfm-agents[anthropic]`：Claude Messages API（`engine=anthropic`）。环境变量见下节。
-- `wfm-agents[agenticx]`：预留给未来官方 SDK；当前通过本地 DevUI 适配。
-
-### Anthropic 引擎（`engine=anthropic`）
-
-安装：`uv sync --extra dev --extra anthropic`（或 `pip install wfm-agents[anthropic]`）。
-
-| 变量 | 说明 |
-|------|------|
-| `WFM_ANTHROPIC_API_KEY` | API Key（优先）；未设置则用 `ANTHROPIC_API_KEY` |
-| `WFM_ANTHROPIC_MODEL` | 模型 ID，默认 `claude-sonnet-4-20250514` |
-| `WFM_ANTHROPIC_MAX_TOOL_ROUNDS` | 模型↔工具往返轮数上限，默认 `16` |
-| `WFM_ANTHROPIC_BASE_URL` | 可选，自定义 API 根 URL（代理/兼容端） |
-
-工具与 MCP 仍经统一 Tool Gateway；引擎内不直连 MCP。
-
-## 多引擎适配（AgenticX / MAF）
-
-`engine=agenticx` 与 `engine=maf` 当前通过本地 DevUI OpenAI-compatible API 打通：
-
-- `WFM_AGENTICX_DEVUI_URL`（默认 `http://127.0.0.1:18081`）
-- `WFM_AGENTICX_ENTITY_ID`（默认 `agent_weather`）
-- `WFM_MAF_DEVUI_URL`（默认 `http://127.0.0.1:18082`）
-- `WFM_MAF_ENTITY_ID`（默认 `agent_weather`）
-
-只要对应 DevUI 服务已启动，`/v1/chat` 与 `/v1/chat/stream` 都可直接切换 `engine` 调用。
+- 单元测试：`cd wfm-agents && uv run pytest -x -q`（75 passed）
+- 架构文档：`docs/ARCH_AGENT_SDK_NATIVE.md`
+- 迁移说明：`docs/WHY_AGENTS_SDK.md`
 
 ## 目录约定
 

@@ -9,3 +9,9 @@
 .idea/
 .vscode/
 wfm-agents-ref/
+
+# secret / 跨项目继承文件（含真实 API Key，禁止入库）
+local.properties
+*.env
+!.env.example
+.envrc
