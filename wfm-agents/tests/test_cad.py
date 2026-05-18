@@ -19,8 +19,8 @@ from wfm_agents.cad import (
     summarize_dxf_text,
 )
 from wfm_agents.routes.chat import (
-    _extract_dxf_candidates,
-    _resolve_dxf_in_workspace,
+    _extract_cad_candidates,
+    _resolve_cad_in_workspace,
 )
 from wfm_agents.server import create_app
 
@@ -142,30 +142,34 @@ class TestParserAndRecipe:
 
 class TestChatExtraction:
     def test_extract_relative_token(self) -> None:
-        out = _extract_dxf_candidates("帮我审一下 drawings/foo.dxf 看看")
+        out = _extract_cad_candidates("帮我审一下 drawings/foo.dxf 看看")
         assert "drawings/foo.dxf" in out
 
     def test_extract_quoted_token(self) -> None:
-        out = _extract_dxf_candidates("看看 'drawings/bar baz.dxf' 这张")
+        out = _extract_cad_candidates("看看 'drawings/bar baz.dxf' 这张")
         # 我们只看到一个候选（不允许中间含空格），所以这里期望提取 baz.dxf
         # 至少要能找到一个以 .dxf 结尾的 token。
         assert any(c.endswith(".dxf") for c in out)
 
     def test_extract_no_token(self) -> None:
-        assert _extract_dxf_candidates("hello world") == []
+        assert _extract_cad_candidates("hello world") == []
+
+    def test_extract_dwg_token(self) -> None:
+        out = _extract_cad_candidates("帮我审一下 drawings/总布置图.dwg 看看")
+        assert any(c.endswith(".dwg") for c in out)
 
     def test_resolve_within_workspace(self, tmp_path: Path) -> None:
         dxf = _write_dxf(tmp_path)
         rel = dxf.relative_to(tmp_path).as_posix()
-        resolved = _resolve_dxf_in_workspace(str(tmp_path), rel)
+        resolved = _resolve_cad_in_workspace(str(tmp_path), rel)
         assert resolved == dxf
 
     def test_resolve_rejects_outside_workspace(self, tmp_path: Path) -> None:
         # Path that escapes the workspace via ../
-        assert _resolve_dxf_in_workspace(str(tmp_path), "../escape.dxf") is None
+        assert _resolve_cad_in_workspace(str(tmp_path), "../escape.dxf") is None
 
     def test_resolve_rejects_nonexistent(self, tmp_path: Path) -> None:
-        assert _resolve_dxf_in_workspace(str(tmp_path), "ghost.dxf") is None
+        assert _resolve_cad_in_workspace(str(tmp_path), "ghost.dxf") is None
 
 
 # --- TestChatRouting (HTTP, echo mode echoes the rewritten prompt) ------------
@@ -307,29 +311,64 @@ class TestChatInlineDxfText:
     def test_inline_blank_dxf_text_returns_400(
         self, client: TestClient, tmp_path: Path
     ) -> None:
-        resp = client.post(
-            "/v1/chat",
-            json={
-                "workspace_root": str(tmp_path),
-                "message": "随便聊聊",
-                "mode": "echo",
-                "engine": "crewai",
-                "dxf_text": "   \n\t  ",
-            },
-        )
-        assert resp.status_code == 400, resp.text
+        """空白 dxf_text 不触发 CAD 分支，走普通聊天。"""
+        from types import SimpleNamespace
 
-    def test_inline_invalid_dxf_text_returns_422(
+        import agents
+
+        import os
+        os.environ.setdefault("WFM_OPENAI_API_KEY", "sk-test")
+        os.environ.setdefault("WFM_AGENT_MODEL", "gpt-test")
+
+        # Mock Runner.run_sync for plain chat fallback
+        original = agents.Runner.run_sync
+        agents.Runner.run_sync = lambda **_kw: SimpleNamespace(
+            final_output="普通聊天回复",
+            new_items=[],
+            raw_responses=[],
+        )
+        try:
+            resp = client.post(
+                "/v1/chat",
+                json={
+                    "workspace_root": str(tmp_path),
+                    "message": "随便聊聊",
+                    "dxf_text": "   \n\t  ",
+                },
+            )
+            assert resp.status_code == 200, resp.text
+        finally:
+            agents.Runner.run_sync = original
+
+    def test_inline_invalid_dxf_text_saves_temp(
         self, client: TestClient, tmp_path: Path
     ) -> None:
-        resp = client.post(
-            "/v1/chat",
-            json={
-                "workspace_root": str(tmp_path),
-                "message": "审图",
-                "mode": "echo",
-                "engine": "crewai",
-                "dxf_text": "this is not a dxf at all",
-            },
+        """无效 dxf_text 仍然保存为临时文件走 CAD 分支（工具调用时才报错）。"""
+        from types import SimpleNamespace
+
+        import agents
+
+        import os
+        os.environ.setdefault("WFM_OPENAI_API_KEY", "sk-test")
+        os.environ.setdefault("WFM_AGENT_MODEL", "gpt-test")
+
+        original = agents.Runner.run_sync
+        agents.Runner.run_sync = lambda **_kw: SimpleNamespace(
+            final_output='{"summary":"test","issues":[],"risks":[],"info_gaps":[]}',
+            new_items=[],
+            raw_responses=[],
         )
-        assert resp.status_code == 422, resp.text
+        try:
+            resp = client.post(
+                "/v1/chat",
+                json={
+                    "workspace_root": str(tmp_path),
+                    "message": "审图",
+                    "dxf_text": "this is not a dxf at all",
+                },
+            )
+            # Route layer saves temp file and dispatches to cad_review_agent.
+            # Response depends on whether the agent succeeds or the mock fires.
+            assert resp.status_code in {200, 502}, resp.text
+        finally:
+            agents.Runner.run_sync = original

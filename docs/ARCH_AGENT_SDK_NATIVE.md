@@ -1,19 +1,21 @@
 # ARCH_AGENT_SDK_NATIVE — 对话后端（OpenAI Agents SDK 原生方案）
 
-> **版本**：v1.0（2026-05-14，agent_v2 迁移后首版）
+> **版本**：v1.1（2026-05-17，同步 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) 工具化重构）
 > **状态**：**正式规格**，取代 `ARCH_AGENT_GATEWAY.md` / `DEV_AGENT_GATEWAY.md` 描述的 EngineAdapter + AgentGateway 抽象作为对话主链路。
 > **关联**：
 > - `ARCH_AGENT_GATEWAY.md`（**已废弃**，保留为历史背景）
 > - `DEV_AGENT_GATEWAY.md`（**已废弃**，保留为历史背景）
-> - `ARCH_CAD_REVIEW.md`（CAD 审图通过 `cad_review_agent` 接入本架构）
+> - **[ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md)**（CAD 审图工具化架构设计 v1.0 — cad_review_agent 的工具集、prompt、数据流定义）
+> - `ARCH_CAD_REVIEW.md`（CAD 浏览 + 审图 v0.2，前端与字体管线不变；后端审图部分已被 ARCH_CAD_REVIEW_AGENT.md 取代）
 > - `CAD_AI_SELECTION_REVIEW.md`（选区审图，L1 在本架构上落地）
 > - `CAD_AI_FEASIBILITY.md`（能力边界与期望管理）
+> - `ARCH_DOCX_REVIEW.md`（DOCX 审阅，同类 agent 模式）
 
 ---
 
 ## 0. 一句话
 
-**`wfm-agents` 的所有对话流量（普通聊天、CAD 审图）都进同一个基于 OpenAI Agents SDK（`agents` 包）的 runner。不再过 `AgentGateway → EngineRegistry → EngineAdapter` 三层抽象，也不再手写 tool loop。Agent 定义、工具注册、流式回流、结构化输出全部走 SDK 原生能力。**
+**`wfm-agents` 的所有对话流量（普通聊天、CAD 审图、DOCX 审阅）都进同一个基于 OpenAI Agents SDK（`agents` 包）的 runner。不再过 `AgentGateway → EngineRegistry → EngineAdapter` 三层抽象，也不再手写 tool loop。Agent 定义、工具注册、流式回流、结构化输出全部走 SDK 原生能力。`cad_review_agent` 拥有 8 个 `@function_tool` CAD 工具，自主决定调哪些工具、怎么分析。**
 
 ---
 
@@ -72,15 +74,16 @@ flowchart LR
 
   subgraph v2 [agent_v2 / 唯一 SDK 触点]
     runner["runner.py\nrun_chat() + run_chat_stream()"]
-    agents["agents.py\nplain_chat_agent\n cad_review_agent"]
-    tools["tools.py\n6 @function_tool"]
+    agents["agents.py\nplain_chat_agent\n cad_review_agent (8 CAD tools)\n docx_review_agent"]
+    tools["tools.py\nworkspace + docx tools"]
     context["context.py\nWfmAgentContext"]
     sse_mod["sse.py\nencode_sse()"]
   end
 
   subgraph shared [共享模块]
     config["agent/config.py\n环境变量 → AgentConfig"]
-    cad["cad/\nsummarize_dxf, CadReviewReport"]
+    cad["cad/\nparser + dwg + tools + checks\nCadReviewReport"]
+    docx["docx/\nparser"]
     fs["fs_ops + workspace\nresolve_within"]
   end
 
@@ -122,9 +125,9 @@ wfm-agents/wfm_agents/
 │
 ├── agent_v2/                      ← 新对话主链路
 │   ├── __init__.py                # 模块 docstring
-│   ├── agents.py                  # Agent 定义：plain_chat_agent, cad_review_agent
+│   ├── agents.py                  # Agent 定义：plain_chat_agent, cad_review_agent, docx_review_agent
 │   ├── context.py                 # WfmAgentContext(workspace_root: str)
-│   ├── tools.py                   # 6 个 @function_tool 工具
+│   ├── tools.py                   # workspace + docx @function_tool（CAD 工具在 cad/tools.py）
 │   ├── sse.py                     # SSE 事件常量 + encode_sse()
 │   ├── runner.py                  # run_chat() / run_chat_stream() — 唯一入口
 │   └── router.py                  # /v1/chat/v2 PoC 路由（非主链路，仅供对比测试）
@@ -134,9 +137,20 @@ wfm-agents/wfm_agents/
 │   ├── chat_stream.py             # POST /v1/chat/stream → run_chat_stream(...)
 │   └── cad_review.py              # POST /v1/cad/review + /v1/cad/review/stream
 │
-├── cad/                           ← CAD 业务逻辑
-│   ├── review.py                  # CadReviewReport + render_markdown()
-│   └── recipes.py                 # format_summary_text()
+├── cad/                           ← CAD 业务逻辑（工具化重构后）
+│   ├── __init__.py                # export
+│   ├── parser.py                  # 粒度化子函数：overview / texts / dims / blocks / layer
+│   ├── dwg.py                     # DWG→DXF 转换（ezdxf recover + LibreDWG CLI fallback）
+│   ├── tools.py                   # 8 个 @function_tool（cad_file_read / cad_extract_* / cad_check_*）
+│   ├── checks.py                  # 命名规范、标题块、标注精度等检查逻辑
+│   ├── recipes.py                 # format_summary_text()（保留兼容，route 层不再调用）
+│   └── review/
+│       ├── __init__.py
+│       └── schema.py              # CadReviewReport + render_markdown()
+│
+├── docx/                          ← DOCX 解析
+│   ├── __init__.py
+│   └── parser.py                  # python-docx 解析 → 结构化 dict
 │
 ├── fs_ops.py                      # read_text / write_text
 ├── workspace.py                   # resolve_within / resolve_workspace_root
@@ -195,7 +209,8 @@ SDK 的 `Agent` 类替代了旧的 `Recipe` Protocol。每个 Agent 封装 name�
 ```python
 from agents import Agent
 from .context import WfmAgentContext
-from .tools import builtin_tools
+from .tools import builtin_tools, docx_tools
+from ..cad.tools import cad_review_tools
 
 plain_chat_agent: Agent[WfmAgentContext] = Agent(
     name="wfm.plain_chat",
@@ -206,11 +221,30 @@ plain_chat_agent: Agent[WfmAgentContext] = Agent(
 )
 
 cad_review_agent: Agent[WfmAgentContext] = Agent(
-    name="wfm.cad_review",
+    name="cad.review",
     instructions=(  # 详尽的 CAD 审图 system prompt，含 JSON 输出格式约束
-        "你是一位资深 CAD 图纸审图工程师..."
+        "你是一位资深 CAD 图纸审图工程师，专长于工业制造与船舶设计图纸。\n"
+        "你有 cad_file_read / cad_extract_* / cad_check_* 等工具。\n\n"
+        "审图流程：\n"
+        "1. 先调 cad_file_read 获取总览\n"
+        "2. 根据总览发现的问题，自主决定调哪些工具深挖\n"
+        "3. 所有结论必须基于工具返回的数据，不臆造\n\n"
+        "输出格式（严格 JSON，不要用 markdown 包裹）：\n"
+        '{"summary":"总体评价","issues":[{"severity":"error|warning|info",'
+        '"category":"分类","title":"问题标题","description":"详细描述",'
+        '"suggestion":"建议","citations":[{"handle":"","layer":"","location":"","text":""}]}],'
+        '"risks":["风险点"],"info_gaps":["信息缺口"]}\n\n'
+        "severity 只能从 error / warning / info 三档里选。\n"
+        "若信息不足以判断某点，列入 info_gaps，不要臆造。\n"
     ),
-    tools=[],                       # 审图不需要 workspace 工具
+    tools=cad_review_tools,         # 8 个 CAD @function_tool
+    tool_use_behavior="run_llm_again",
+)
+
+docx_review_agent: Agent[WfmAgentContext] = Agent(
+    name="wfm.docx_review",
+    instructions=_SYSTEM_ZH_DOCX_REVIEW,  # 金额核对 system prompt
+    tools=docx_tools,                     # [workspace_read, workspace_write, docx_read]
     tool_use_behavior="run_llm_again",
 )
 ```
@@ -223,7 +257,9 @@ cad_review_agent: Agent[WfmAgentContext] = Agent(
 | `build_system()` 返回 prompt 字符串 | `instructions` 直接是字符串 |
 | `build_user_blocks()` 拼装 content blocks | Runner 层拼 prompt，Agent 不感知 |
 | `response_schema: type[BaseModel]` | 不使用 SDK `output_type`（GLM 兼容），改为手动 parse |
-| `tools_enabled: bool` | `tools=[]` 等价禁用 |
+| `tools_enabled: bool` | `tools=[...]` 传入 `@function_tool` 列表 |
+
+> **注意**：`cad_review_agent` 的工具集定义在 `cad/tools.py`（8 个工具），详见 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) §3。工具包含 Tier 1 总览（`cad_file_read`）、Tier 2 按需深挖（`cad_extract_*` / `cad_layer_inspect`）、Tier 3 专项检查（`cad_check_*`）。
 
 ---
 
@@ -246,28 +282,41 @@ def workspace_read(ctx: RunContextWrapper[WfmAgentContext], path: str) -> str:
     return read_text(ctx.context.workspace_root, path)
 ```
 
-**6 个已注册工具**：
+**已注册工具**：
 
-| 工具名 | 分类 | 说明 |
-|--------|------|------|
-| `workspace_read` | Builtin | 读工作区内文本文件 |
-| `workspace_write` | Builtin | 写工作区内文本文件 |
-| `cad_generate_step` | CAD | Python source → STEP/STP |
-| `cad_inspect` | CAD | STEP 几何检测（facts / planes / positioning） |
-| `cad_render` | CAD | STEP/GLB → PNG/SVG 渲染 |
-| `cad_export_dxf` | CAD | Python source → DXF 导出 |
+| 工具名 | 分类 | 归属 Agent | 说明 |
+|--------|------|-----------|------|
+| `workspace_read` | Builtin | plain_chat | 读工作区内文本文件 |
+| `workspace_write` | Builtin | plain_chat | 写工作区内文本文件 |
+| `docx_read` | DOCX | docx_review | 解析 .docx 文件（段落 + 表格） |
+| `cad_file_read` | CAD Tier 1 | cad_review | 读取 CAD 文件总览摘要 |
+| `cad_extract_texts` | CAD Tier 2 | cad_review | 提取文字内容（TEXT + MTEXT） |
+| `cad_extract_dims` | CAD Tier 2 | cad_review | 提取标注信息（DIMENSION） |
+| `cad_extract_blocks` | CAD Tier 2 | cad_review | 提取块定义（BLOCK） |
+| `cad_layer_inspect` | CAD Tier 2 | cad_review | 深入检查单个图层 |
+| `cad_check_naming` | CAD Tier 3 | cad_review | 检查图层/块命名规范 |
+| `cad_check_titleblock` | CAD Tier 3 | cad_review | 检查标题块完整性和格式 |
+| `cad_check_dim_accuracy` | CAD Tier 3 | cad_review | 检查标注精度（几何 vs 文字覆盖） |
 
 **工具集导出**：
 
 ```python
-# tools.py 底部
+# agent_v2/tools.py 底部
 builtin_tools = [workspace_read, workspace_write]
-cad_tools = [workspace_read, workspace_write, cad_generate_step, cad_inspect, cad_render, cad_export_dxf]
+docx_tools = [workspace_read, workspace_write, docx_read]
+
+# cad/tools.py 底部
+cad_review_tools = [
+    cad_file_read, cad_extract_texts, cad_extract_dims, cad_extract_blocks,
+    cad_layer_inspect, cad_check_naming, cad_check_titleblock, cad_check_dim_accuracy,
+]
 ```
 
 - `plain_chat_agent` 使用 `builtin_tools`（2 个工具）。
-- `cad_review_agent` 使用 `[]`（审图不需要工具，纯文本推理）。
-- CAD 工具集（6 个工具）预留给未来的 CAD 生成 Agent。
+- `cad_review_agent` 使用 `cad_review_tools`（8 个 CAD 审图工具）。
+- `docx_review_agent` 使用 `docx_tools`（3 个工具）。
+
+> CAD 工具的完整定义、参数、返回格式见 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) §3。DWG 文件后端处理见同文档 §4。
 
 **安全模型**：所有工具通过 `ctx.context.workspace_root` 获取工作区根，文件路径一律 `resolve_within()` 校验，与旧版一致。
 
@@ -285,7 +334,8 @@ def run_chat(
     message: str,
     workspace_root: str,
     session_id: str | None = None,
-    cad_extras: dict[str, Any] | None = None,
+    cad_file_path: str | None = None,
+    docx_extras: dict[str, Any] | None = None,
 ) -> ChatResult:
 ```
 
@@ -293,12 +343,15 @@ def run_chat(
 
 1. `load_config()` → 构建 `RunConfig`（含 `OpenAIProvider`、`ModelSettings`）。
 2. 构造 `WfmAgentContext(workspace_root=...)`。
-3. 根据 `cad_extras` 是否为 `None` 选择 Agent：
-   - `cad_extras is not None` → `cad_review_agent`，prompt 由 `_build_cad_prompt()` 拼装（DXF 摘要 + 用户问题）。
+3. 根据 `cad_file_path` / `docx_extras` 选择 Agent：
+   - `cad_file_path is not None` → `cad_review_agent`，prompt 为 `"请审图，文件路径: {path}\n用户要求: {message}"`（不解析文件、不拼摘要，全交给 agent 调工具）。
+   - `docx_extras is not None` → `docx_review_agent`，prompt 由 `_build_docx_prompt()` 拼装。
    - 否则 → `plain_chat_agent`，prompt 直接是用户消息。
 4. 调 `Runner.run_sync(starting_agent=..., input=prompt, context=ctx, run_config=..., max_turns=...)`。
 5. 对 CAD 审图结果调 `_parse_cad_review()` 剥离 code fences 并校验 schema。
 6. 返回 `ChatResult` dataclass。
+
+> **重要变更**：CAD 审图不再在 runner 层做 DXF 摘要。runner 只传文件路径给 agent，由 agent 通过 8 个 `@function_tool` 自主调取数据。详见 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) §5–§6。
 
 ### 8.2 流式入口 `run_chat_stream()`
 
@@ -308,7 +361,8 @@ async def run_chat_stream(
     message: str,
     workspace_root: str,
     session_id: str | None = None,
-    cad_extras: dict[str, Any] | None = None,
+    cad_file_path: str | None = None,
+    docx_extras: dict[str, Any] | None = None,
 ) -> AsyncIterator[bytes]:
 ```
 
@@ -404,8 +458,8 @@ data: {"type":"done","session_id":"abc-123","trace_id":null,"text":"完整回复
 |-----------|------|----------|------|
 | `/v1/chat` | POST | `asyncio.to_thread(run_chat, ...)` | 同步，返回 JSON |
 | `/v1/chat/stream` | POST | `run_chat_stream(...)` | SSE 流式 |
-| `/v1/cad/review` | POST | `asyncio.to_thread(run_chat, ..., cad_extras=...)` | 同步审图 |
-| `/v1/cad/review/stream` | POST | `run_chat_stream(..., cad_extras=...)` | SSE 流式审图 |
+| `/v1/cad/review` | POST | `asyncio.to_thread(run_chat, ..., cad_file_path=...)` | 同步审图 |
+| `/v1/cad/review/stream` | POST | `run_chat_stream(..., cad_file_path=...)` | SSE 流式审图 |
 
 ### 10.2 ChatRequest（与旧版兼容）
 
@@ -417,18 +471,23 @@ class ChatRequest(BaseModel):
     recipe: Literal["plain_chat","cad_review",...] | None = None
     language: Literal["zh-CN","en"] | None = None
     extras: dict | None = None
+    # CAD 文件引用（支持 .dwg 和 .dxf）
+    dxf_text: str | None = None                  # inline DXF（来自 viewer）
+    cad_source_uri: str | None = None            # CAD 文件 URI（右键菜单 / 消息提取）
+    dxf_source_uri: str | None = None            # 向后兼容，等同 cad_source_uri
+    # DOCX 文件引用
+    docx_path: str | None = None                 # 工作区内 .docx 文件相对路径
     # 兼容旧字段
-    dxf_text: str | None = None                  # inline DXF
-    dxf_source_uri: str | None = None
     mode: ChatMode | None = None                 # 忽略 + deprecation warn
     engine: EngineId | None = None               # 忽略 + deprecation warn
 ```
 
-**CAD 检测逻辑**（与旧版一致）：
+**CAD 检测逻辑**（route 层 `_resolve_cad_file_ref()`，详见 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) §6.2）：
 
-1. `dxf_text` 存在 → 解析 DXF → `cad_extras`
-2. `message` 中包含工作区内真实存在的 `.dxf` 路径 → 解析 DXF → `cad_extras`
-3. 否则 → `cad_extras = None`（普通聊天）
+1. `dxf_text` 存在 → 写临时 .dxf 文件 → `cad_file_path = tmp_path`
+2. `cad_source_uri` 存在 → resolve 为文件系统路径 → `cad_file_path`
+3. `message` 中包含工作区内 `.dxf` / `.dwg` 路径 → resolve → `cad_file_path`
+4. 都没命中 → `cad_file_path = None`（普通聊天或 DOCX 审阅）
 
 ### 10.3 ChatReply（与旧版一致）
 
@@ -467,13 +526,15 @@ GLM-5.1（智谱 BigModel）通过 OpenAI 兼容层接入，有以下特殊处�
 
 ## 12. 与旧文档的关系
 
-| 旧文档 | 状态 | 处理 |
-|--------|------|------|
-| `ARCH_AGENT_GATEWAY.md` | **已废弃** | 顶部已有 DEPRECATED 横幅，链到本文档。描述的 `AgentGateway + EngineRegistry + EngineAdapter` 三层不再被使用 |
+| 文档 | 状态 | 与本文的关系 |
+|------|------|-------------|
+| `ARCH_AGENT_GATEWAY.md` | **已废弃** | 顶部已有 DEPRECATED 横幅，链到本文档 |
 | `DEV_AGENT_GATEWAY.md` | **已废弃** | 顶部已有 DEPRECATED 横幅，链到本文档 |
-| `ARCH_CAD_REVIEW.md` | **现行** | 审图分支通过 `cad_review_agent` 接入；DXF 摘要管线、`CadReviewReport` schema、`render_markdown()` 不变 |
-| `CAD_AI_SELECTION_REVIEW.md` | **现行** | L1 选区在 `cad_review_agent` 的 prompt 中加 `selection` 约束实现 |
-| `CAD_AI_FEASIBILITY.md` | **现行** | 能力评估与多模态结论沿用 |
+| **[ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md)** | **现行（v1.0）** | CAD 审图工具化架构设计。定义 `cad_review_agent` 的 8 个工具、prompt、DWG 处理、route 层改造。本文 §6–§8 中 CAD 相关内容以其为准 |
+| `ARCH_CAD_REVIEW.md` | **部分现行** | 前端 viewer / 字体管线不变；§3（后端 DXF 摘要管线）和审图链路已被 ARCH_CAD_REVIEW_AGENT.md 取代 |
+| `ARCH_DOCX_REVIEW.md` | **现行** | DOCX 审阅规格，与 CAD 审图同类模式 |
+| `CAD_AI_SELECTION_REVIEW.md` | **现行** | 选区审图，Phase 2 扩展方向 |
+| `CAD_AI_FEASIBILITY.md` | **现行** | 能力评估与多模态结论沿用；§6 工具底座已在 ARCH_CAD_REVIEW_AGENT.md 中落地 |
 
 ---
 

@@ -19,7 +19,7 @@ import { Action2, MenuId, registerAction2 } from '../../../../platform/actions/c
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { ExplorerFolderContext } from '../../files/common/files.js';
-import { relativePath } from '../../../../base/common/resources.js';
+import { basename, extname, relativePath } from '../../../../base/common/resources.js';
 import { IWfmAgentClientService } from '../common/wfmAgentClient.js';
 import { WfmAgentClientService } from './wfmAgentClientService.js';
 import { WfmChatViewPane } from './wfmChatViewPane.js';
@@ -81,12 +81,33 @@ class SendToWfmChatAction extends Action2 {
 		if (!URI.isUri(resource)) {
 			return;
 		}
-		const contextService = accessor.get(IWorkspaceContextService);
+
+
+		const ext = extname(resource).toLowerCase();
 		const agentClient = accessor.get(IWfmAgentClientService);
+		const fileName = basename(resource);
+
+		if (ext === '.dwg' || ext === '.dxf') {
+			// CAD 文件：直接提交审图请求，后端根据 URI 读取文件
+			await agentClient.submitExternalChat({
+				message: localize(
+					'wfm.chat.cadReview',
+					"请审一下当前 CAD 图（{0}），用通用方法逐项检查。",
+					fileName,
+				),
+				originLabel: `explorer: ${fileName}`,
+				extras: {
+					dxfSourceUri: resource.toString(),
+				},
+			});
+			return;
+		}
+
+		const contextService = accessor.get(IWorkspaceContextService);
 
 		const workspace = contextService.getWorkspace();
 		const folder = workspace.folders[0];
-		const relPath = folder ? relativePath(folder.uri, resource) : resource.path;
+		const relPath = folder ? (relativePath(folder.uri, resource) ?? resource.path) : resource.path;
 
 		await agentClient.prefillChatInput(
 			localize('wfm.chat.prefill.file', "请帮我分析一下这个文件: {0} ", relPath),

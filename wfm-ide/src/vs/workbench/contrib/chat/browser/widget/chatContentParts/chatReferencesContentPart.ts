@@ -530,7 +530,7 @@ registerAction2(class AddToChatAction extends Action2 {
 		super({
 			id: AddToChatAction.id,
 			title: {
-				...localize2('addToChat', "Add File to Chat"),
+				...localize2('addToChat', "Add File to WFM"),
 			},
 			f1: false,
 			menu: [{

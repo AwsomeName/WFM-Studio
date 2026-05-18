@@ -19,7 +19,7 @@ from ..agent_v2.runner import run_chat, run_chat_stream
 from ..cad.review import CadReviewReport
 from ..observability import errors as err_codes
 from ..workspace import WorkspaceViolation, resolve_workspace_root
-from .chat import ChatRequest, _extract_cad_review_extras
+from .chat import ChatRequest, _resolve_cad_file_ref
 
 _log = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ class CadReviewRequest(BaseModel):
     language: str | None = None
     dxf_text: str | None = None
     dxf_source_uri: str | None = None
+    cad_source_uri: str | None = None
 
     def to_chat_request(self) -> ChatRequest:
         return ChatRequest(
@@ -45,6 +46,7 @@ class CadReviewRequest(BaseModel):
             language=self.language,  # type: ignore[arg-type]
             dxf_text=self.dxf_text,
             dxf_source_uri=self.dxf_source_uri,
+            cad_source_uri=self.cad_source_uri,
         )
 
 
@@ -63,24 +65,24 @@ def _resolve_root_or_400(workspace_root: str):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _build_extras_or_400(chat_req: ChatRequest, root) -> dict[str, Any]:
-    extras = _extract_cad_review_extras(chat_req, root)
-    if extras is None:
+def _resolve_cad_file_or_400(chat_req: ChatRequest, root) -> str:
+    cad_file_path = _resolve_cad_file_ref(chat_req, root)
+    if cad_file_path is None:
         raise HTTPException(
             status_code=400,
             detail=(
-                "/v1/cad/review 需要 dxf_text（inline）或 message 中包含工作区"
-                "已存在的 .dxf 路径。"
+                "/v1/cad/review 需要 dxf_text（inline）、cad_source_uri、"
+                "或 message 中包含工作区已存在的 .dxf/.dwg 路径。"
             ),
         )
-    return extras
+    return cad_file_path
 
 
 @router.post("/review", response_model=CadReviewResponse)
 async def cad_review(req: CadReviewRequest) -> CadReviewResponse:
     chat_req = req.to_chat_request()
     root = _resolve_root_or_400(req.workspace_root)
-    extras = _build_extras_or_400(chat_req, root)
+    cad_file_path = _resolve_cad_file_or_400(chat_req, root)
 
     try:
         result = await asyncio.to_thread(
@@ -88,7 +90,7 @@ async def cad_review(req: CadReviewRequest) -> CadReviewResponse:
             message=req.message,
             workspace_root=str(root),
             session_id=req.session_id,
-            cad_extras=extras,
+            cad_file_path=cad_file_path,
         )
     except AgentConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -119,14 +121,14 @@ async def cad_review_stream(
 ) -> StreamingResponse:
     chat_req = req.to_chat_request()
     root = _resolve_root_or_400(req.workspace_root)
-    extras = _build_extras_or_400(chat_req, root)
+    cad_file_path = _resolve_cad_file_or_400(chat_req, root)
 
     async def gen():
         async for frame in run_chat_stream(
             message=req.message,
             workspace_root=str(root),
             session_id=req.session_id,
-            cad_extras=extras,
+            cad_file_path=cad_file_path,
         ):
             if await request.is_disconnected():
                 break

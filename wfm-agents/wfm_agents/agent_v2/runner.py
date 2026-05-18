@@ -14,19 +14,22 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+
+import httpx
+from openai import AsyncOpenAI
 
 from agents import RunConfig, Runner
 from agents.model_settings import ModelSettings
 from agents.models.openai_provider import OpenAIProvider
 
 from ..agent.config import AgentConfigError, load_config
-from ..cad.recipes import format_summary_text
 from ..cad.review import CadReviewReport, render_markdown
+from ..docx import format_docx_content
 
-from .agents import cad_review_agent, plain_chat_agent
+from .agents import cad_review_agent, docx_review_agent, plain_chat_agent
 from .context import WfmAgentContext
 from .sse import EVENT_DONE, EVENT_ERROR, EVENT_TEXT_DELTA, EVENT_TOOL_CALL_DONE, EVENT_TOOL_CALL_STARTED, encode_sse
 
@@ -53,9 +56,13 @@ class ChatResult:
 
 def _build_run_config() -> tuple[RunConfig, int]:
     cfg = load_config()
-    provider = OpenAIProvider(
+    client = AsyncOpenAI(
         api_key=cfg.api_key,
         base_url=cfg.base_url,
+        timeout=httpx.Timeout(cfg.request_timeout, connect=10.0),
+    )
+    provider = OpenAIProvider(
+        openai_client=client,
         use_responses=cfg.use_responses_api,
     )
     return RunConfig(
@@ -65,14 +72,14 @@ def _build_run_config() -> tuple[RunConfig, int]:
     ), cfg.max_tool_rounds
 
 
-def _build_cad_prompt(cad_extras: dict[str, Any], user_message: str) -> str:
-    summary_text = format_summary_text(cad_extras["dxf_summary"])
-    source = cad_extras.get("dxf_source", "unknown")
-    user_msg = (user_message or "").strip() or "（用户未提供具体审图要求，请按通用方法审。）"
+def _build_docx_prompt(docx_extras: dict[str, Any], user_message: str) -> str:
+    content = docx_extras["docx_content"]
+    source = docx_extras.get("docx_source", "unknown")
+    user_msg = (user_message or "").strip() or "请核对文件中的所有金额。"
+    formatted = format_docx_content(content)
     return (
-        f"### DXF 摘要 (来源: {source})\n```\n{summary_text}\n```\n\n"
-        f"### 用户问题\n{user_msg}\n\n"
-        "请基于摘要给出结构化审图报告，直接输出纯 JSON，不要用 markdown 代码块包裹。"
+        f"### Word 文档内容 (来源: {source})\n\n{formatted}\n\n"
+        f"### 用户问题\n{user_msg}\n"
     )
 
 
@@ -130,16 +137,22 @@ def run_chat(
     message: str,
     workspace_root: str,
     session_id: str | None = None,
-    cad_extras: dict[str, Any] | None = None,
+    cad_file_path: str | None = None,
+    docx_extras: dict[str, Any] | None = None,
 ) -> ChatResult:
     """Run a single chat turn (blocking). Called from route handlers via ``asyncio.to_thread``."""
     run_config, max_turns = _build_run_config()
     ctx = WfmAgentContext(workspace_root=workspace_root)
-    is_cad = cad_extras is not None
 
-    if is_cad:
+    if cad_file_path is not None:
         agent = cad_review_agent
-        prompt = _build_cad_prompt(cad_extras, message)
+        prompt = (
+            f"请审图，文件路径: {cad_file_path}\n"
+            f"用户要求: {message}"
+        )
+    elif docx_extras is not None:
+        agent = docx_review_agent
+        prompt = _build_docx_prompt(docx_extras, message)
     else:
         agent = plain_chat_agent
         prompt = message
@@ -153,6 +166,7 @@ def run_chat(
     )
 
     final = result.final_output
+    is_cad = cad_file_path is not None
     if is_cad and isinstance(final, str):
         content, report = _parse_cad_review(final)
     elif isinstance(final, CadReviewReport):
@@ -181,16 +195,22 @@ async def run_chat_stream(
     message: str,
     workspace_root: str,
     session_id: str | None = None,
-    cad_extras: dict[str, Any] | None = None,
+    cad_file_path: str | None = None,
+    docx_extras: dict[str, Any] | None = None,
 ) -> AsyncIterator[bytes]:
     """Yield SSE frames as ``bytes``."""
     run_config, max_turns = _build_run_config()
     ctx = WfmAgentContext(workspace_root=workspace_root)
-    is_cad = cad_extras is not None
 
-    if is_cad:
+    if cad_file_path is not None:
         agent = cad_review_agent
-        prompt = _build_cad_prompt(cad_extras, message)
+        prompt = (
+            f"请审图，文件路径: {cad_file_path}\n"
+            f"用户要求: {message}"
+        )
+    elif docx_extras is not None:
+        agent = docx_review_agent
+        prompt = _build_docx_prompt(docx_extras, message)
     else:
         agent = plain_chat_agent
         prompt = message
@@ -236,6 +256,7 @@ async def run_chat_stream(
 
         # Stream complete — emit done
         final = streamed.final_output
+        is_cad = cad_file_path is not None
         if is_cad and isinstance(final, str):
             content, _ = _parse_cad_review(final)
         else:

@@ -350,7 +350,7 @@ registerAction2(class AddFileToChatAction extends Action2 {
 	constructor() {
 		super({
 			id: AddFileToChatAction.id,
-			title: nls.localize2('actions.attach.label', "Add File to Chat"),
+			title: nls.localize2('actions.attach.label', "Add File to WFM"),
 			menu: [{
 				id: MenuId.ChatInlineResourceAnchorContext,
 				group: 'chat',

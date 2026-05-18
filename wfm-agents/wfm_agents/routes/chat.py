@@ -2,9 +2,12 @@
 
 Dispatch policy:
 
-* CAD review (inline ``dxf_text`` or workspace ``.dxf`` token) — runs
-  ``cad_review_agent`` through ``Runner.run``.
-* Anything else — ``plain_chat_agent`` through ``Runner.run``.
+* CAD review (inline ``dxf_text``, ``cad_source_uri``, or workspace
+  ``.dxf``/``.dwg`` token) — resolves file path, runs ``cad_review_agent``
+  with 8 tools. Agent decides which tools to call.
+* DOCX review (explicit ``docx_path`` or ``.docx`` token) — runs
+  ``docx_review_agent``.
+* Anything else — ``plain_chat_agent``.
 
 The legacy ``engine`` / ``mode`` request fields are accepted for backward
 compatibility but ignored.
@@ -18,17 +21,13 @@ import re
 from os import getenv
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import unquote, urlparse
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..agent.config import AgentConfigError
 from ..agent_v2.runner import ChatResult, run_chat
-from ..cad import (
-    DxfParseError,
-    summarize_dxf,
-    summarize_dxf_text,
-)
 from ..gateway.models import EngineId, TurnRequest
 from ..observability import errors as err_codes
 from ..workspace import WorkspaceViolation, resolve_within, resolve_workspace_root
@@ -73,13 +72,21 @@ class ChatRequest(BaseModel):
         default=None,
         description="Optional: DXF text from front-end viewer.",
     )
+    cad_source_uri: str | None = Field(
+        default=None,
+        description="Optional: CAD file URI (.dwg / .dxf) from right-click menu or message extraction.",
+    )
     dxf_source_uri: str | None = Field(
         default=None,
-        description="Optional: DXF source URI (audit label only).",
+        description="Optional: DXF source URI (backward compat, same as cad_source_uri).",
     )
     session_id: str | None = Field(
         default=None,
         description="Optional: session id for continuity.",
+    )
+    docx_path: str | None = Field(
+        default=None,
+        description="Optional: workspace-relative .docx path for document review.",
     )
     recipe: Literal["plain_chat", "cad_review", "cad_generation", "echo"] | None = Field(
         default=None,
@@ -128,7 +135,8 @@ async def chat(req: ChatRequest) -> ChatReply:
     except WorkspaceViolation as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    cad_extras = _extract_cad_review_extras(req, root)
+    cad_file_path = _resolve_cad_file_ref(req, root)
+    docx_extras = _extract_docx_review_extras(req, root)
 
     if req.engine:
         _log.warning("deprecated: ignoring legacy field engine=%s", req.engine)
@@ -141,7 +149,8 @@ async def chat(req: ChatRequest) -> ChatReply:
             message=req.message,
             workspace_root=str(root),
             session_id=req.session_id,
-            cad_extras=cad_extras,
+            cad_file_path=cad_file_path,
+            docx_extras=docx_extras,
         )
     except AgentConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -169,15 +178,16 @@ def select_chat_mode(req: ChatRequest) -> ChatMode:
     return "echo"
 
 
-# --- CAD detection (unchanged) ----------------------------------------
+# --- CAD detection (path-based, supports .dxf + .dwg) ----------------
 
-_DXF_TOKEN_RE = re.compile(
+
+_CAD_TOKEN_RE = re.compile(
     r"""
     [\"'`]?
     (
         [^\s\"'`,;]*?
         [^\s\"'`,;/\\]+
-        \.dxf
+        \.(?:dxf|dwg)
     )
     [\"'`]?
     """,
@@ -185,11 +195,11 @@ _DXF_TOKEN_RE = re.compile(
 )
 
 
-def _extract_dxf_candidates(message: str) -> list[str]:
-    return [m.group(1) for m in _DXF_TOKEN_RE.finditer(message)]
+def _extract_cad_candidates(message: str) -> list[str]:
+    return [m.group(1) for m in _CAD_TOKEN_RE.finditer(message)]
 
 
-def _resolve_dxf_in_workspace(workspace_root: str, candidate: str) -> Path | None:
+def _resolve_cad_in_workspace(workspace_root: str, candidate: str) -> Path | None:
     cleaned = candidate.replace("\\", "/").lstrip("./").strip()
     if not cleaned:
         return None
@@ -199,61 +209,143 @@ def _resolve_dxf_in_workspace(workspace_root: str, candidate: str) -> Path | Non
         return None
     if not target.is_file():
         return None
-    if target.suffix.lower() != ".dxf":
+    if target.suffix.lower() not in {".dxf", ".dwg"}:
         return None
     return target
 
 
-def _extract_cad_review_extras(
-    req: ChatRequest, root: Path
-) -> dict[str, Any] | None:
-    inline = _try_extract_inline_dxf_summary(req)
-    if inline is not None:
-        summary, source = inline
-        return {"dxf_summary": summary, "dxf_source": source}
+def _uri_to_workspace_relative(uri: str, root: Path) -> str | None:
+    """Convert a file URI or path to workspace-relative path."""
+    if uri.startswith("file://"):
+        parsed = urlparse(uri)
+        abs_path = Path(unquote(parsed.path))
+    else:
+        abs_path = Path(uri)
 
-    workspace = _try_extract_workspace_dxf_summary(req, root)
-    if workspace is not None:
-        summary, source = workspace
-        return {"dxf_summary": summary, "dxf_source": source}
+    try:
+        rel = abs_path.relative_to(root)
+        return str(rel)
+    except ValueError:
+        return None
+
+
+def _resolve_cad_file_ref(req: ChatRequest, root: Path) -> str | None:
+    """Resolve CAD file reference from request. Returns workspace-relative path or temp path."""
+    # Path 1: dxf_text from viewer → write to temp file
+    if req.dxf_text and req.dxf_text.strip():
+        from ..cad.dwg import save_temp_dxf  # noqa: PLC0415
+
+        try:
+            tmp = save_temp_dxf(req.dxf_text, source_label="viewer")
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422, detail=f"DXF 文本保存失败: {exc}"
+            ) from exc
+        return str(tmp)
+
+    # Path 2: cad_source_uri (right-click menu)
+    source_uri = req.cad_source_uri or req.dxf_source_uri
+    if source_uri:
+        rel = _uri_to_workspace_relative(source_uri, root)
+        if rel:
+            # Validate file exists
+            target = resolve_within(str(root), rel)
+            if target.is_file() and target.suffix.lower() in {".dxf", ".dwg"}:
+                return rel
+
+    # Path 3: message text mentions .dxf/.dwg
+    candidates = _extract_cad_candidates(req.message)
+    for candidate in candidates:
+        resolved = _resolve_cad_in_workspace(str(root), candidate)
+        if resolved is not None:
+            try:
+                return str(resolved.relative_to(root))
+            except ValueError:
+                return str(resolved)
 
     return None
 
 
-def _try_extract_inline_dxf_summary(
-    req: ChatRequest,
-) -> tuple[dict[str, Any], str] | None:
-    raw = req.dxf_text
-    if raw is None:
+# --- DOCX 审阅分支 -------------------------------------------------------
+
+_DOCX_TOKEN_RE = re.compile(
+    r"""
+    [\"'`]?
+    (
+        [^\s\"'`,;]*?
+        [^\s\"'`,;/\\]+
+        \.docx
+    )
+    [\"'`]?
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _extract_docx_candidates(message: str) -> list[str]:
+    return [m.group(1) for m in _DOCX_TOKEN_RE.finditer(message)]
+
+
+def _resolve_docx_in_workspace(workspace_root: str, candidate: str) -> Path | None:
+    cleaned = candidate.replace("\\", "/").lstrip("./").strip()
+    if not cleaned:
         return None
-    if not isinstance(raw, str) or not raw.strip():
-        raise HTTPException(
-            status_code=400, detail="dxf_text 字段存在但为空字符串"
-        )
     try:
-        summary = summarize_dxf_text(raw, source_label=req.dxf_source_uri)
-    except DxfParseError as exc:
-        raise HTTPException(status_code=422, detail=f"DXF 解析失败: {exc}") from exc
-    return summary, req.dxf_source_uri or "viewer_inline"
+        target = resolve_within(workspace_root, cleaned)
+    except WorkspaceViolation:
+        return None
+    if not target.is_file():
+        return None
+    if target.suffix.lower() != ".docx":
+        return None
+    return target
 
 
-def _try_extract_workspace_dxf_summary(
+def _extract_docx_review_extras(
     req: ChatRequest, root: Path
-) -> tuple[dict[str, Any], str] | None:
-    candidates = _extract_dxf_candidates(req.message)
-    if not candidates:
-        return None
-    resolved: Path | None = None
+) -> dict[str, Any] | None:
+    """Detect a DOCX review request.
+
+    Two trigger paths:
+    1. Explicit ``docx_path`` field in request body (from future attachment UI).
+    2. .docx file name/path mentioned in the user's message (like .dxf detection).
+    """
+    # Path 1: explicit docx_path
+    path = req.docx_path
+    if path:
+        return _resolve_docx_path(str(root), path)
+
+    # Path 2: .docx token in message text
+    candidates = _extract_docx_candidates(req.message)
     for candidate in candidates:
-        resolved = _resolve_dxf_in_workspace(str(root), candidate)
+        resolved = _resolve_docx_in_workspace(str(root), candidate)
         if resolved is not None:
-            break
-    if resolved is None:
-        return None
+            return _parse_docx_file(resolved)
+
+    return None
+
+
+def _resolve_docx_path(workspace_root: str, path: str) -> dict[str, Any]:
     try:
-        summary = summarize_dxf(resolved)
-    except DxfParseError as exc:
-        raise HTTPException(status_code=422, detail=f"DXF 解析失败: {exc}") from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return summary, str(resolved)
+        target = resolve_within(workspace_root, path)
+    except WorkspaceViolation:
+        raise HTTPException(status_code=400, detail=f"路径越界: {path}") from None
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
+    if target.suffix.lower() != ".docx":
+        raise HTTPException(status_code=400, detail=f"仅支持 .docx 文件: {path}")
+    return _parse_docx_file(target)
+
+
+def _parse_docx_file(target: Path) -> dict[str, Any]:
+    from ..docx import parse_docx
+
+    try:
+        content = parse_docx(target)
+    except ValueError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422, detail=f"文档解析失败: {exc}"
+        ) from exc
+    return {"docx_content": content, "docx_source": str(target)}

@@ -17,6 +17,7 @@ from agents import RunContextWrapper, function_tool
 
 from ..fs_ops import read_text, write_text
 from ..workspace import WorkspaceViolation, resolve_within
+from ..docx import format_docx_content, parse_docx
 
 _log = logging.getLogger(__name__)
 
@@ -246,9 +247,52 @@ def cad_export_dxf(
     return _run_cad_subprocess(cmd, root, timeout=60)
 
 
+# ── DOCX tools ────────────────────────────────────────────────────────
+
+
+@function_tool
+def docx_read(
+    ctx: RunContextWrapper, path: str, extract_tables_only: bool = False
+) -> str:
+    """读取并解析工作区内的 .docx 文件，提取段落和表格的完整内容。
+
+    Args:
+        path: 工作区相对路径，如 'docs/投标文件.docx'。
+        extract_tables_only: 仅提取表格（跳过段落），适用于金额核对场景。
+    """
+    root = ctx.context.workspace_root
+    try:
+        target = resolve_within(root, path)
+    except WorkspaceViolation as exc:
+        return f"Error: {exc}"
+
+    if not target.is_file():
+        return f"Error: 文件不存在: {path}"
+    if target.suffix.lower() != ".docx":
+        return f"Error: 仅支持 .docx 文件: {path}"
+
+    try:
+        content = parse_docx(target)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    except Exception as exc:
+        return f"Error: 文档解析失败: {exc}"
+
+    if extract_tables_only:
+        content = {
+            "metadata": content["metadata"],
+            "paragraphs": [],
+            "tables": [{**t, "caption": None} for t in content["tables"]],
+            "stats": content["stats"],
+        }
+
+    return format_docx_content(content)
+
+
 # ── Exported tool lists for agents ────────────────────────────────────
 
 builtin_tools = [workspace_read, workspace_write]
+docx_tools = [workspace_read, workspace_write, docx_read]
 cad_tools = [
     workspace_read,
     workspace_write,

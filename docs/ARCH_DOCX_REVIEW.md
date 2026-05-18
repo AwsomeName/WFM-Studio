@@ -1,10 +1,10 @@
 # ARCH_DOCX_REVIEW — Word 文档解析与审阅
 
-> **版本**：v0.2（2026-05-14）；**状态**：规格（实现前）
+> **版本**：v0.3（2026-05-17）；**状态**：规格（实现前）
 > **分支**：`feat/docx-review`
-> **关联**：[ARCH_AGENT_SDK_NATIVE.md](ARCH_AGENT_SDK_NATIVE.md)（对话后端正式规格）、[ARCH_CAD_REVIEW.md](ARCH_CAD_REVIEW.md)（CAD 审图，同类模式参考）、[TASK_SCENARIOS.md](TASK_SCENARIOS.md)、[PLAN.md](PLAN.md) Phase 7
+> **关联**：[ARCH_AGENT_SDK_NATIVE.md](ARCH_AGENT_SDK_NATIVE.md)（对话后端正式规格）、[ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md)（CAD 审图工具化架构 v1.0，同类模式参考）、[ARCH_CAD_REVIEW.md](ARCH_CAD_REVIEW.md)（CAD 浏览 + 审图 v0.2，前端部分）、[TASK_SCENARIOS.md](TASK_SCENARIOS.md)、[PLAN.md](PLAN.md) Phase 7
 > **原则**：若本文与 ARCH_AGENT_SDK_NATIVE 冲突，以 ARCH_AGENT_SDK_NATIVE 为准。
-> **变更**：v0.1 基于 Recipe/ToolProvider 模式设计；后端已迁移至 OpenAI Agents SDK（`agent_v2/`），v0.2 重写为 Agent + `@function_tool` 模式。
+> **变更**：v0.1 基于 Recipe/ToolProvider 模式设计；v0.2 迁移至 Agent + `@function_tool` 模式；v0.3 同步 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) 的 route 层改造（`cad_file_path` 替代 `cad_extras`，`_resolve_cad_file_ref` 替代 `_extract_cad_review_extras`）。
 
 ---
 
@@ -231,7 +231,7 @@ docx_tools = [workspace_read, workspace_write, docx_read]
 
 ### 3.6 runner.py 分发逻辑
 
-`agent_v2/runner.py` 的 `run_chat()` 函数增加 `docx_extras` 参数和分发分支：
+`agent_v2/runner.py` 的 `run_chat()` 函数增加 `docx_extras` 参数和分发分支（CAD 审图已改为 `cad_file_path` 参数，详见 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) §6）：
 
 ```python
 def run_chat(
@@ -239,15 +239,18 @@ def run_chat(
     message: str,
     workspace_root: str,
     session_id: str | None = None,
-    cad_extras: dict[str, Any] | None = None,
+    cad_file_path: str | None = None,
     docx_extras: dict[str, Any] | None = None,   # 新增
 ) -> ChatResult:
     run_config, max_turns = _build_run_config()
     ctx = WfmAgentContext(workspace_root=workspace_root)
 
-    if cad_extras is not None:
+    if cad_file_path is not None:
         agent = cad_review_agent
-        prompt = _build_cad_prompt(cad_extras, message)
+        prompt = (
+            f"请审图，文件路径: {cad_file_path}\n"
+            f"用户要求: {message}"
+        )
     elif docx_extras is not None:               # 新增
         agent = docx_review_agent
         prompt = _build_docx_prompt(docx_extras, message)
@@ -322,7 +325,7 @@ def _extract_docx_review_extras(
 **路由分发优先级**（`chat()` 函数）：
 
 ```python
-cad_extras = _extract_cad_review_extras(req, root)
+cad_file_path = _resolve_cad_file_ref(req, root)       # 新：只返回文件路径
 docx_extras = _extract_docx_review_extras(req, root)
 
 result: ChatResult = await asyncio.to_thread(
@@ -330,12 +333,14 @@ result: ChatResult = await asyncio.to_thread(
     message=req.message,
     workspace_root=str(root),
     session_id=req.session_id,
-    cad_extras=cad_extras,
-    docx_extras=docx_extras,    # 新增
+    cad_file_path=cad_file_path,
+    docx_extras=docx_extras,
 )
 ```
 
 分发优先级：**CAD > DOCX > PlainChat**（由 `run_chat()` 内部判断）。
+
+> **注意**：CAD 审图的 route 层逻辑已从 `_extract_cad_review_extras`（返回含 DXF 摘要的 dict）改为 `_resolve_cad_file_ref`（只返回文件路径字符串）。CAD 文件的解析、摘要生成全部交给 `cad_review_agent` 通过 8 个 `@function_tool` 自主完成。详见 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) §6。
 
 ---
 

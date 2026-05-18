@@ -363,6 +363,206 @@ def _build_summary(doc: Any, file_meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _load_doc(path: str | os.PathLike[str]) -> tuple[Any, dict[str, Any]]:
+    """加载 CAD 文件（DXF/DWG）为 ezdxf Document。
+
+    自动处理 DWG→DXF 转换（通过 :func:`cad.dwg.resolve_cad_file`）。
+    返回 ``(doc, file_meta)`` 供粒度化子函数共用。
+    """
+    from .dwg import resolve_cad_file  # noqa: PLC0415
+
+    ezdxf = _require_ezdxf()
+
+    file_path = Path(os.fspath(path)).expanduser().resolve(strict=False)
+    if not file_path.is_file():
+        raise FileNotFoundError(f"文件不存在: {file_path}")
+
+    resolved = resolve_cad_file(file_path)
+    is_temp = resolved != file_path
+
+    try:
+        doc = ezdxf.readfile(str(resolved))
+    except Exception as exc:
+        raise DxfParseError(
+            f"ezdxf 读取失败: {type(exc).__name__}: {exc}"
+        ) from exc
+    finally:
+        if is_temp:
+            try:
+                resolved.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    file_meta = {
+        "path": str(file_path),
+        "size_bytes": file_path.stat().st_size,
+    }
+    return doc, file_meta
+
+
+def summarize_dxf_overview(path: str | os.PathLike[str]) -> dict[str, Any]:
+    """读取 CAD 文件并返回结构化总览摘要。
+
+    包含文件元数据、图层列表（含实体计数）、实体统计、标题块字段等，
+    但不含完整的文字/标注/块列表（由专用工具按需取）。
+    """
+    doc, file_meta = _load_doc(path)
+
+    layers = _extract_layers(doc)
+    by_layer_type, texts, dimensions, totals, layouts = _scan_entities(doc)
+    layer_counts = {layer: sum(types.values()) for layer, types in by_layer_type.items()}
+
+    text_styles = _extract_named_table(_safe_attr(doc, "styles", None))
+    dim_styles = _extract_named_table(_safe_attr(doc, "dimstyles", None))
+
+    # 尝试提取标题块信息
+    title_block: dict[str, str | None] = {}
+    title_keywords = {"图名", "图号", "审核", "设计", "日期", "比例", "材料", "project", "title", "date", "checked", "designed", "scale", "material"}
+    for t in texts:
+        content = t.get("text", "").strip()
+        layer_name = t.get("layer", "")
+        if layer_name and any(kw in layer_name.lower() for kw in ("title", "图框", "标题", "block")):
+            for kw in title_keywords:
+                if kw.lower() in content.lower() and ":" in content:
+                    val = content.split(":", 1)[1].strip()
+                    if val:
+                        title_block[kw] = val
+                    break
+
+    return {
+        "file": file_meta,
+        "header": _extract_header(doc),
+        "layer_count": len(layers),
+        "layers": [
+            {
+                "name": l.name,
+                "entity_count": layer_counts.get(l.name, 0),
+                "types": dict(by_layer_type.get(l.name, {})),
+            }
+            for l in layers[:_MAX_LAYERS_DETAIL]
+        ],
+        "stats": {
+            "total_entities": sum(layer_counts.values()),
+            "texts": totals["texts"]["total"],
+            "dimensions": totals["dims"]["total"],
+            "blocks": sum(
+                1 for b in doc.blocks  # type: ignore[attr-defined]
+                if not str(_safe_attr(b, "name", "")).startswith("*")
+            ),
+        },
+        "title_block": title_block or None,
+        "text_styles": text_styles,
+        "dim_styles": dim_styles,
+    }
+
+
+def summarize_dxf_texts(
+    path: str | os.PathLike[str],
+    *,
+    layer: str | None = None,
+) -> dict[str, Any]:
+    """提取 CAD 文件中的文字内容（TEXT + MTEXT）。
+
+    Args:
+        path: 工作区相对路径或绝对路径。
+        layer: 可选，只提取指定图层的文字。
+    """
+    doc, file_meta = _load_doc(path)
+    _, texts, _, _, _ = _scan_entities(doc)
+
+    if layer:
+        texts = [t for t in texts if t.get("layer") == layer]
+
+    return {
+        "file": file_meta,
+        "count": len(texts),
+        "texts": texts,
+    }
+
+
+def summarize_dxf_dims(
+    path: str | os.PathLike[str],
+    *,
+    layer: str | None = None,
+) -> dict[str, Any]:
+    """提取标注信息（DIMENSION），含测量值、文字覆盖、关联实体。
+
+    Args:
+        path: 工作区相对路径或绝对路径。
+        layer: 可选，只提取指定图层的标注。
+    """
+    doc, file_meta = _load_doc(path)
+    _, _, dimensions, _, _ = _scan_entities(doc)
+
+    if layer:
+        dimensions = [d for d in dimensions if d.get("layer") == layer]
+
+    return {
+        "file": file_meta,
+        "count": len(dimensions),
+        "dimensions": dimensions,
+    }
+
+
+def summarize_dxf_blocks(path: str | os.PathLike[str]) -> dict[str, Any]:
+    """提取块定义（BLOCK），含名称、实体组成。
+
+    Args:
+        path: 工作区相对路径或绝对路径。
+    """
+    doc, file_meta = _load_doc(path)
+
+    blocks: list[dict[str, Any]] = []
+    for block in doc.blocks:  # type: ignore[attr-defined]
+        name = str(_safe_attr(block, "name", ""))
+        if not name or name.startswith("*"):
+            continue
+        entity_types: dict[str, int] = {}
+        for entity in block:
+            etype = entity.dxftype()
+            entity_types[etype] = entity_types.get(etype, 0) + 1
+        blocks.append({
+            "name": name,
+            "entity_count": sum(entity_types.values()),
+            "entity_types": entity_types,
+        })
+        if len(blocks) >= _MAX_BLOCKS:
+            break
+
+    return {
+        "file": file_meta,
+        "count": len(blocks),
+        "blocks": blocks,
+    }
+
+
+def summarize_dxf_layer(
+    path: str | os.PathLike[str],
+    layer: str,
+) -> dict[str, Any]:
+    """深入检查单个图层：实体类型分布、文字内容、标注值。
+
+    Args:
+        path: 工作区相对路径或绝对路径。
+        layer: 图层名称。
+    """
+    doc, file_meta = _load_doc(path)
+    by_layer_type, texts, dimensions, _, _ = _scan_entities(doc)
+
+    types = dict(by_layer_type.get(layer, {}))
+    layer_texts = [t for t in texts if t.get("layer") == layer]
+    layer_dims = [d for d in dimensions if d.get("layer") == layer]
+
+    return {
+        "file": file_meta,
+        "layer": layer,
+        "entity_count": sum(types.values()),
+        "entity_types": types,
+        "texts": layer_texts,
+        "dimensions": layer_dims,
+    }
+
+
 def summarize_dxf(path: str | os.PathLike[str]) -> dict[str, Any]:
     """读取一份 DXF 并返回 LLM 友好的摘要。"""
     ezdxf = _require_ezdxf()

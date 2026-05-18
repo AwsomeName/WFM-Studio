@@ -11,7 +11,9 @@
 | `workspace_root` | 是 | 当前工作区根路径（IDE 已自动注入） |
 | `message` | 是 | 用户任务描述 |
 | `dxf_text` | 否 | 前端 viewer 直接附带的 DXF 文本（CAD 审图用） |
-| `dxf_source_uri` | 否 | DXF 来源 URI（审计标签） |
+| `cad_source_uri` | 否 | CAD 文件 URI（支持 .dwg 和 .dxf，右键菜单或消息提取） |
+| `dxf_source_uri` | 否 | 向后兼容，等同 `cad_source_uri` |
+| `docx_path` | 否 | 工作区内 .docx 文件相对路径（DOCX 审阅用） |
 | `session_id` | 否 | 会话 ID（连续对话） |
 | `language` | 否 | `zh-CN`（默认） \| `en` |
 | `recipe` | 否 | 强制指定 recipe（`plain_chat` / `cad_review` / `echo`） |
@@ -88,7 +90,7 @@
 
 ---
 
-## 用户故事 4：CAD 浏览与审图（v0.2 真渲染版，详见 [ARCH_CAD_REVIEW.md](ARCH_CAD_REVIEW.md)）
+## 用户故事 4：CAD 浏览与审图（v0.2 真渲染 + 工具化审图，详见 [ARCH_CAD_REVIEW.md](ARCH_CAD_REVIEW.md) + [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md)）
 
 **作为**审图工程师，**我要**把 .dwg 或 .dxf 放进工作目录后双击就能看到接近 AutoCAD 的可交互视图（pan/zoom/选实体/切图层），再点工具栏「AI 审图」或在右侧任务对话里发指令拿审图意见，**以便**完整覆盖"看图 + 审图"两个动作。
 
@@ -98,22 +100,27 @@
 | 操作 1 | Explorer 双击 .dwg 或 .dxf |
 | 期望 1 | 中央区直接出现 cad-viewer：可平移/缩放/选实体/切图层/查图层统计；首次加载 1-2 秒下载 viewer bundle |
 | 操作 2A | 在 viewer 工具栏点「AI 审图」按钮 |
-| 期望 2A | viewer 把 in-browser 解析得到的 DXF 文本通过 IPC 送到 `POST /v1/chat`（带 `dxf_text` 字段）→ 走 `wfm.cad_review` recipe → 右侧任务对话出现回复 |
-| 操作 2B（兼容路径） | 在「任务对话」直接输入：`审一下 <相对路径>.dxf` |
-| 期望 2B | 后端 chat 路由识别到 .dxf token → 磁盘 lookup → ezdxf 摘要 → 同 recipe 回复 |
+| 期望 2A | viewer 把 in-browser 解析得到的 DXF 文本通过 IPC 送到 `POST /v1/chat`（带 `dxf_text` 字段）→ route 层写临时文件 → `cad_review_agent` 通过 8 个工具自主审图 → 右侧任务对话出现回复 |
+| 操作 2B（兼容路径） | 在「任务对话」直接输入：`审一下 <相对路径>.dwg` |
+| 期望 2B | 后端 chat 路由识别到 .dwg token → `_resolve_cad_file_ref` → 后端 DWG→DXF 转换 → `cad_review_agent` 通过工具自主审图 |
 
 **API**：
-- 审图：仅复用 `POST /v1/chat`，body 在 v0.1 基础上**新增可选 `dxf_text` 字段**（前端 viewer 触发时填入；聊天打字触发时不填）
-- ~~`POST /v1/cad/convert`~~（v0.1 接口，v0.2 已下线）
+- 审图：复用 `POST /v1/chat`，支持 `dxf_text`、`cad_source_uri`、消息中 `.dxf`/`.dwg` 路径三种入口
+- route 层不再解析文件，只做路径标准化（`_resolve_cad_file_ref`），交给 `cad_review_agent` 的 8 个 `@function_tool` 自主完成审图
+- 详见 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) §6
 
 **前端**：
 - 模块 `contrib/wfm/cadReview/`（EditorPane + .dwg/.dxf 双关联 + webview 内嵌 cad-viewer）
 - `IWfmAgentClientService.chat(message, { dxfText? })` 接受可选 inline DXF
-- ~~`convertDwgToDxf` / Explorer 右键菜单~~（v0.1 接口，v0.2 已下线）
 
-**v0.2 已落地**（v0.1 列为"v2 缺口"的项）：
+**v0.2 已落地**：
 - ✅ DXF / DWG 真渲染（cad-viewer + libredwg-web + Three.js + WebGL）
 - ✅ viewer ↔ 审图触发联动（工具栏按钮）
+
+**工具化审图已设计（待实现）**：
+- `cad_review_agent` 拥有 8 个 `@function_tool`（总览 / 文字提取 / 标注提取 / 块提取 / 图层深挖 / 命名规范 / 标题块 / 标注精度），详见 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) §3
+- route 层简化为路径解析 + agent 选择，详见同文档 §6
+- 后端 DWG→DXF fallback 转换，详见同文档 §4
 
 **仍是缺口（Phase 3）**：
 

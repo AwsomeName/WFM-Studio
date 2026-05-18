@@ -6,7 +6,7 @@
  *    已下线，详见 docs/ARCH_CAD_REVIEW.md。
  *
  *  Explorer 右键菜单：
- *  - 「AI 审图」: .dxf 文件直接读磁盘发 dxf_text；.dwg 打开 CAD Viewer。
+ *  - 「AI 审图」: .dxf 直接读磁盘发 dxf_text；.dwg 打开 CAD Viewer（WASM 转换后发 dxf_text）。
  *--------------------------------------------------------------------------------------------*/
 
 import { SyncDescriptor } from '../../../../../platform/instantiation/common/descriptors.js';

@@ -3,9 +3,10 @@
 > **目的**：把"用大模型审 CAD 图，效果上到底能做到什么程度"这件事讲清楚，避免对内/对外做出做不到的承诺。
 > **定位**：能力评估与期望管理文档（**回答"能不能做、做到什么效果"**）。
 > **配套**：
-> - [ARCH_AGENT_SDK_NATIVE.md](ARCH_AGENT_SDK_NATIVE.md) — 对话后端正式规格（审图以 *recipe* 接入；本文 §3.2 / §6 关于 SDK 能力发挥的讨论在此架构下成立）
+> - **[ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md)** — CAD 审图工具化架构设计 v1.0（本文 §6 工具底座已在该文档中落地为 8 个 `@function_tool`）
+> - [ARCH_AGENT_SDK_NATIVE.md](ARCH_AGENT_SDK_NATIVE.md) — 对话后端正式规格（审图通过 `cad_review_agent` + 工具接入；本文 §3.2 / §6 关于"agent + 预置工具"范式的讨论在该架构下成立）
 > - [CAD_AI_SELECTION_REVIEW.md](CAD_AI_SELECTION_REVIEW.md) — 选区审图 / 反标 的**实现方案**（回答"怎么做"）
-> - [ARCH_CAD_REVIEW.md](ARCH_CAD_REVIEW.md) — v0.2 CAD 浏览 + 审图**当前管线**
+> - [ARCH_CAD_REVIEW.md](ARCH_CAD_REVIEW.md) — v0.2 CAD 浏览 + 审图管线（前端部分不变；后端审图部分已被 ARCH_CAD_REVIEW_AGENT.md 取代）
 > - [TASK_SCENARIOS.md](TASK_SCENARIOS.md) — 用户故事
 
 ---
@@ -105,7 +106,7 @@
 
 ### 4.1 工具/MCP 服务本身要有人先写
 
-"AI 调 MCP 解决"的前提是 MCP server 已存在。当前项目的 ToolGateway / MCP 还在骨架阶段。建议的最小 CAD 工具集见 [§6](#6-必备的工具底座清单)。
+"AI 调 MCP 解决"的前提是 MCP server 已存在。当前项目已落地第一阶段：8 个 CAD 审图 `@function_tool`（见 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) §3），涵盖文件总览、文字/标注/块提取、命名规范、标题块、标注精度检查。MCP 暴露为 Phase 2 扩展方向。建议的完整工具底座见 [§6](#6-必备的工具底座清单)。
 
 每个工具 1–3 天活，写一次复用永远，比让 AI 现编可靠 100 倍。
 
@@ -172,11 +173,16 @@ flowchart TD
 
 ---
 
-## 6. 必备的工具底座清单（建议的 MCP / 内部工具集）
+## 6. 必备的工具底座清单（Phase 1 已落地 8 个 `@function_tool`，完整 MCP 为 Phase 2）
 
-下面是支撑"AI + 工具"审图模式所需的最小工具底座，每个粒度都是"高频复用、能单元测试、参数化"的：
+下面是支撑"AI + 工具"审图模式所需的完整工具底座。**Phase 1 已落地**的 8 个 `@function_tool` 见 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) §3（文件总览、文字/标注/块提取、图层深挖、命名规范、标题块、标注精度）。**Phase 2+** 待扩展的 MCP 工具集如下，每个粒度都是"高频复用、能单元测试、参数化"的：
 
 ```
+# Phase 1 已落地为 @function_tool（见 ARCH_CAD_REVIEW_AGENT.md §3）：
+#   cad_file_read / cad_extract_texts / cad_extract_dims / cad_extract_blocks
+#   cad_layer_inspect / cad_check_naming / cad_check_titleblock / cad_check_dim_accuracy
+
+# Phase 2+ 待扩展的 MCP 工具集：
 mcp-cad-geometry        # 几何计算（纯本地，无外部依赖）
   - measure_distance(handle_a, handle_b)
   - check_interference(layer_filter, min_clearance_mm)
@@ -186,7 +192,7 @@ mcp-cad-geometry        # 几何计算（纯本地，无外部依赖）
       # 圆/弧实体附近 N 米内无 DIMENSION
   - detect_overlapping_dims(bbox_tolerance)
 
-mcp-cad-conventions     # 命名 / 图层规范（公司可配置规则集）
+mcp-cad-conventions     # 命名 / 图层规范（公司可配置规则集，Phase 1 已有基础版 cad_check_naming）
   - validate_layer_naming(rule_set_id)
   - check_titleblock_completeness(template_id)
   - detect_unicode_garbled_text()

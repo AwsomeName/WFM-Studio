@@ -129,7 +129,7 @@ class AttachFileToChatAction extends AttachResourceAction {
 	constructor() {
 		super({
 			id: AttachFileToChatAction.ID,
-			title: localize2('workbench.action.chat.attachFile.label', "Add File to Chat"),
+			title: localize2('workbench.action.chat.attachFile.label', "Add File to WFM"),
 			category: CHAT_CATEGORY,
 			icon: Codicon.attach,
 			precondition: ChatContextKeys.enabled,
@@ -211,7 +211,7 @@ class AttachFolderToChatAction extends AttachResourceAction {
 	constructor() {
 		super({
 			id: AttachFolderToChatAction.ID,
-			title: localize2('workbench.action.chat.attachFolder.label', "Add Folder to Chat"),
+			title: localize2('workbench.action.chat.attachFolder.label', "Add Folder to WFM"),
 			category: CHAT_CATEGORY,
 			f1: false,
 			menu: {
@@ -251,7 +251,7 @@ class AttachPinnedEditorsToChatAction extends Action2 {
 	constructor() {
 		super({
 			id: AttachPinnedEditorsToChatAction.ID,
-			title: localize2('workbench.action.chat.attachPinnedEditors.label', "Add Pinned Editors to Chat"),
+			title: localize2('workbench.action.chat.attachPinnedEditors.label', "Add Pinned Editors to WFM"),
 			category: CHAT_CATEGORY,
 			precondition: ChatContextKeys.enabled,
 			f1: true,
@@ -297,7 +297,7 @@ class AttachSelectionToChatAction extends Action2 {
 	constructor() {
 		super({
 			id: AttachSelectionToChatAction.ID,
-			title: localize2('workbench.action.chat.attachSelection.label', "Add Selection to Chat"),
+			title: localize2('workbench.action.chat.attachSelection.label', "Add Selection to WFM"),
 			category: CHAT_CATEGORY,
 			icon: Codicon.attach,
 			f1: true,
@@ -385,7 +385,7 @@ export class AttachSearchResultAction extends Action2 {
 	constructor() {
 		super({
 			id: 'workbench.action.chat.insertSearchResults',
-			title: localize2('chat.insertSearchResults', 'Add Search Results to Chat'),
+			title: localize2('chat.insertSearchResults', 'Add Search Results to WFM'),
 			category: CHAT_CATEGORY,
 			f1: false,
 			menu: [{

@@ -35,49 +35,50 @@ import { ChatViewPane } from './widgetHosts/viewPane/chatViewPane.js';
 
 // --- Chat Container &  View Registration
 
-const chatViewIcon = registerIcon('chat-view-icon', Codicon.chatSparkle, localize('chatViewIcon', 'View icon of the chat view.'));
+// const chatViewIcon = registerIcon('chat-view-icon', Codicon.chatSparkle, localize('chatViewIcon', 'View icon of the chat view.'));
 
-const chatViewContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
-	id: ChatViewContainerId,
-	title: localize2('chat.viewContainer.label', "Chat"),
-	icon: chatViewIcon,
-	ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [ChatViewContainerId, { mergeViewWithContainerWhenSingleView: true }]),
-	storageId: ChatViewContainerId,
-	hideIfEmpty: true,
-	order: 1,
-}, ViewContainerLocation.AuxiliaryBar, { isDefault: true, doNotRegisterOpenCommand: true });
-
-const chatViewDescriptor: IViewDescriptor = {
-	id: ChatViewId,
-	containerIcon: chatViewContainer.icon,
-	containerTitle: chatViewContainer.title.value,
-	singleViewPaneContainerTitle: chatViewContainer.title.value,
-	name: localize2('chat.viewContainer.label', "Chat"),
-	canToggleVisibility: false,
-	canMoveView: true,
-	openCommandActionDescriptor: {
-		id: ChatViewContainerId,
-		title: chatViewContainer.title,
-		mnemonicTitle: localize({ key: 'miToggleChat', comment: ['&& denotes a mnemonic'] }, "&&Chat"),
-		keybindings: {
-			primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyI,
-			mac: {
-				primary: KeyMod.CtrlCmd | KeyMod.WinCtrl | KeyCode.KeyI
-			}
-		},
-		order: 1
-	},
-	ctorDescriptor: new SyncDescriptor(ChatViewPane),
-	when: ContextKeyExpr.or(
-		ContextKeyExpr.and(
-			ChatContextKeys.Setup.hidden.negate(),
-			ChatContextKeys.Setup.disabledInWorkspace.negate(),
-		),
-		ChatContextKeys.panelParticipantRegistered,
-		ChatContextKeys.extensionInvalid
-	)
-};
-Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([chatViewDescriptor], chatViewContainer);
+// --- Original Chat panel registration commented out (WFM Studio replaces it) ---
+// const chatViewContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
+// 	id: ChatViewContainerId,
+// 	title: localize2('chat.viewContainer.label', "Chat"),
+// 	icon: chatViewIcon,
+// 	ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [ChatViewContainerId, { mergeViewWithContainerWhenSingleView: true }]),
+// 	storageId: ChatViewContainerId,
+// 	hideIfEmpty: true,
+// 	order: 1,
+// }, ViewContainerLocation.AuxiliaryBar, { isDefault: true, doNotRegisterOpenCommand: true });
+//
+// const chatViewDescriptor: IViewDescriptor = {
+// 	id: ChatViewId,
+// 	containerIcon: chatViewContainer.icon,
+// 	containerTitle: chatViewContainer.title.value,
+// 	singleViewPaneContainerTitle: chatViewContainer.title.value,
+// 	name: localize2('chat.viewContainer.label', "Chat"),
+// 	canToggleVisibility: false,
+// 	canMoveView: true,
+// 	openCommandActionDescriptor: {
+// 		id: ChatViewContainerId,
+// 		title: chatViewContainer.title,
+// 		mnemonicTitle: localize({ key: 'miToggleChat', comment: ['&& denotes a mnemonic'] }, "&&Chat"),
+// 		keybindings: {
+// 			primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyI,
+// 			mac: {
+// 				primary: KeyMod.CtrlCmd | KeyMod.WinCtrl | KeyCode.KeyI
+// 			}
+// 		},
+// 		order: 1
+// 	},
+// 	ctorDescriptor: new SyncDescriptor(ChatViewPane),
+// 	when: ContextKeyExpr.or(
+// 		ContextKeyExpr.and(
+// 			ChatContextKeys.Setup.hidden.negate(),
+// 			ChatContextKeys.Setup.disabledInWorkspace.negate(),
+// 		),
+// 		ChatContextKeys.panelParticipantRegistered,
+// 		ChatContextKeys.extensionInvalid
+// 	)
+// };
+// Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([chatViewDescriptor], chatViewContainer);
 
 const chatParticipantExtensionPoint = extensionsRegistry.ExtensionsRegistry.registerExtensionPoint<IRawChatParticipantContribution[]>({
 	extensionPoint: 'chatParticipants',
