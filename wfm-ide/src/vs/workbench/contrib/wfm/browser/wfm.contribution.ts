@@ -18,9 +18,12 @@ import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor,
 import { Action2, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
 import { ExplorerFolderContext } from '../../files/common/files.js';
-import { basename, extname, relativePath } from '../../../../base/common/resources.js';
+import { ResourceContextKey } from '../../../common/contextkeys.js';
+import { basename, relativePath } from '../../../../base/common/resources.js';
 import { IWfmAgentClientService } from '../common/wfmAgentClient.js';
+import type { IWfmFileAttachment } from '../common/wfmAgentClient.js';
 import { WfmAgentClientService } from './wfmAgentClientService.js';
 import { WfmChatViewPane } from './wfmChatViewPane.js';
 
@@ -82,39 +85,75 @@ class SendToWfmChatAction extends Action2 {
 			return;
 		}
 
-
-		const ext = extname(resource).toLowerCase();
 		const agentClient = accessor.get(IWfmAgentClientService);
-		const fileName = basename(resource);
-
-		if (ext === '.dwg' || ext === '.dxf') {
-			// CAD 文件：直接提交审图请求，后端根据 URI 读取文件
-			await agentClient.submitExternalChat({
-				message: localize(
-					'wfm.chat.cadReview',
-					"请审一下当前 CAD 图（{0}），用通用方法逐项检查。",
-					fileName,
-				),
-				originLabel: `explorer: ${fileName}`,
-				extras: {
-					dxfSourceUri: resource.toString(),
-				},
-			});
-			return;
-		}
-
 		const contextService = accessor.get(IWorkspaceContextService);
+		const fileName = basename(resource);
 
 		const workspace = contextService.getWorkspace();
 		const folder = workspace.folders[0];
-		const relPath = folder ? (relativePath(folder.uri, resource) ?? resource.path) : resource.path;
+		const rel = folder ? (relativePath(folder.uri, resource) ?? resource.path) : resource.path;
 
-		await agentClient.prefillChatInput(
-			localize('wfm.chat.prefill.file', "请帮我分析一下这个文件: {0} ", relPath),
-		);
+		const file: IWfmFileAttachment = {
+			uri: resource.toString(),
+			name: fileName,
+			relPath: rel,
+		};
+
+		await agentClient.attachFiles([file]);
 	}
 }
 
 registerAction2(SendToWfmChatAction);
+
+//#endregion
+
+//#region --- Explorer 右键菜单: AI 金额核对 (.docx) ---
+
+class DocxAmountReviewAction extends Action2 {
+	constructor() {
+		super({
+			id: 'wfm.docx.amountReview',
+			title: localize2('docxAmountReview', "AI 金额核对"),
+			f1: false,
+			menu: [{
+				id: MenuId.ExplorerContext,
+				group: 'navigation',
+				order: 25,
+				when: ContextKeyExpr.and(
+					ExplorerFolderContext.negate(),
+					ContextKeyExpr.regex(ResourceContextKey.Extension.key, /\.docx$/i),
+				),
+			}],
+		});
+	}
+
+	async run(accessor: ServicesAccessor, resource?: URI): Promise<void> {
+		if (!URI.isUri(resource)) {
+			return;
+		}
+
+		const agentClient = accessor.get(IWfmAgentClientService);
+		const contextService = accessor.get(IWorkspaceContextService);
+		const fileName = basename(resource);
+
+		const workspace = contextService.getWorkspace();
+		const folder = workspace.folders[0];
+		const rel = folder ? (relativePath(folder.uri, resource) ?? resource.path) : resource.path;
+
+		await agentClient.submitExternalChat({
+			message: '请核对这份文档中的所有金额：逐行验证 数量×单价=合价，核对每个表格的小计，核对总计，并交叉比对正文提及的金额与表格数据。',
+			extras: {
+				attachments: [{
+					uri: resource.toString(),
+					name: fileName,
+					relPath: rel,
+				}],
+			},
+			originLabel: rel,
+		});
+	}
+}
+
+registerAction2(DocxAmountReviewAction);
 
 //#endregion

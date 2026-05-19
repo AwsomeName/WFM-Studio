@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from ..agent.config import AgentConfigError
 from ..agent_v2.runner import run_chat_stream
 from ..workspace import WorkspaceViolation, resolve_workspace_root
-from .chat import ChatRequest, _resolve_cad_file_ref
+from .chat import ChatRequest, _build_prompt, _resolve_attachments
 
 _log = logging.getLogger(__name__)
 
@@ -24,7 +24,8 @@ async def chat_stream(request: Request, req: ChatRequest) -> StreamingResponse:
     except WorkspaceViolation as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    cad_file_path = _resolve_cad_file_ref(req, root)
+    prompt = _build_prompt(req, root)
+    attachments = _resolve_attachments(req, root)
 
     if req.engine:
         _log.warning("deprecated: ignoring legacy field engine=%s", req.engine)
@@ -34,10 +35,11 @@ async def chat_stream(request: Request, req: ChatRequest) -> StreamingResponse:
     async def sse_gen():
         try:
             async for frame in run_chat_stream(
-                message=req.message,
+                message=prompt,
                 workspace_root=str(root),
                 session_id=req.session_id,
-                cad_file_path=cad_file_path,
+                attachments=attachments,
+                model=req.model,
             ):
                 if await request.is_disconnected():
                     break

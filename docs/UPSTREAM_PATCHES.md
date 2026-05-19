@@ -107,6 +107,13 @@
 - 改动类型：二进制替换
 - 同上
 
+### wfm-ide/src/vs/workbench/contrib/chat/browser/chatParticipant.contribution.ts
+
+- 改动类型：注释 import
+- 改动摘要：注释掉 12 个因原始 Chat panel 注册（38–81 行）被注释后而变为未使用的 import 符号（`Codicon`、`KeyCode`/`KeyMod`、`localize2`、`ContextKeyExpr`、`registerIcon`、`ViewPaneContainer`、`IViewContainersRegistry`/`IViewDescriptor`/`ViewContainer`/`ViewContainerLocation`、`ChatViewContainerId`、`ChatViewPane`），保留 `localize`、`IContextKeyService`、`IViewsRegistry`/`ViewExtensions`、`ChatViewId` 等仍被下游代码使用的符号
+- 目的：TS 开启 `noUnusedLocals`，这些死 import 导致编译失败（12 errors），进而整个 chat contribution 链路在 workbench 启动时无法注册，WFM 对话面板 body 空白
+- 升级检查：若上游重构此文件，确认注释掉的 import 与注释掉的注册代码仍对应；若上游删除注释块，一并删除对应注释掉的 import
+
 ---
 
 ## 变更日志（每次修改或升级时追加一条）

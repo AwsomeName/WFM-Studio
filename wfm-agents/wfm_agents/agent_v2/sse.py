@@ -15,6 +15,7 @@ EVENT_TOOL_CALL_STARTED: Final = "tool_call_started"
 EVENT_TOOL_CALL_DONE: Final = "tool_call_done"
 EVENT_ERROR: Final = "error"
 EVENT_DONE: Final = "done"
+EVENT_AGENT_HANDOFF: Final = "agent_handoff"
 
 
 def encode_sse(event: dict[str, Any]) -> bytes:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from os import getenv
+from pathlib import Path
 
 DEFAULT_MODEL = "gpt-4.1-mini"
 
@@ -48,26 +50,51 @@ def _read_bool(name: str, default: str = "false") -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _read_settings(workspace_root: str | None = None) -> dict:
+    """Read .wfm/settings.json from workspace root. Returns {} if not found."""
+    if not workspace_root:
+        return {}
+    p = Path(workspace_root) / ".wfm" / "settings.json"
+    if not p.is_file():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
 def load_config(
     *,
     model_override: str | None = None,
     temperature_override: float | None = None,
+    workspace_root: str | None = None,
 ) -> AgentConfig:
-    """Load AgentConfig from environment variables.
+    """Load AgentConfig from .wfm/settings.json + environment variables.
 
-    ``model_override`` takes precedence over ``WFM_AGENT_MODEL`` /
-    ``WFM_OPENAI_MODEL`` so recipes (e.g. CAD review) can request a specific
-    model without mutating the global env.
+    Priority: settings.json > model_override > env vars > DEFAULT_MODEL.
     """
-    api_key = (getenv("WFM_OPENAI_API_KEY") or getenv("OPENAI_API_KEY") or "").strip()
+    settings = _read_settings(workspace_root)
+
+    api_key = (
+        settings.get("apiKey")
+        or getenv("WFM_OPENAI_API_KEY")
+        or getenv("OPENAI_API_KEY")
+        or ""
+    ).strip()
     if not api_key:
         raise AgentConfigError(
-            "未配置 OpenAI API Key：请设置 WFM_OPENAI_API_KEY 或 OPENAI_API_KEY。"
+            "未配置 OpenAI API Key：请在 .wfm/settings.json 设置 apiKey，"
+            "或设置 WFM_OPENAI_API_KEY / OPENAI_API_KEY 环境变量。"
         )
-    base_url = (getenv("WFM_OPENAI_BASE_URL") or "").strip() or None
+    base_url = (
+        settings.get("baseUrl")
+        or getenv("WFM_OPENAI_BASE_URL")
+        or ""
+    ).strip() or None
 
     model = (
         model_override
+        or settings.get("model")
         or getenv("WFM_AGENT_MODEL")
         or getenv("WFM_OPENAI_MODEL")
         or DEFAULT_MODEL

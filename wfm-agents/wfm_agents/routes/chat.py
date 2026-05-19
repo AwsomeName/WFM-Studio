@@ -1,16 +1,11 @@
 """Chat endpoint — backed by agent_v2 (OpenAI Agents SDK).
 
-Dispatch policy:
+Route layer does **structural detection** (file references, attachments)
+and injects context into the prompt. The ``router_agent`` decides which
+specialised agent to hand off to based on the enriched prompt.
 
-* CAD review (inline ``dxf_text``, ``cad_source_uri``, or workspace
-  ``.dxf``/``.dwg`` token) — resolves file path, runs ``cad_review_agent``
-  with 8 tools. Agent decides which tools to call.
-* DOCX review (explicit ``docx_path`` or ``.docx`` token) — runs
-  ``docx_review_agent``.
-* Anything else — ``plain_chat_agent``.
-
-The legacy ``engine`` / ``mode`` request fields are accepted for backward
-compatibility but ignored.
+The legacy ``engine`` / ``mode`` / ``recipe`` request fields are accepted
+for backward compatibility but ignored.
 """
 
 from __future__ import annotations
@@ -47,6 +42,14 @@ def select_default_engine() -> EngineId:
     if raw in _VALID_ENGINES:
         return raw  # type: ignore[return-value]
     return _DEFAULT_ENGINE_FALLBACK
+
+
+class FileAttachment(BaseModel):
+    """A file attached by the user from the Explorer / attachment UI."""
+
+    uri: str = Field(..., description="File URI (file://) or workspace-relative path.")
+    name: str = Field(..., description="Display file name (e.g. 'report.docx').")
+    rel_path: str | None = Field(default=None, description="Workspace-relative path, if resolved.")
 
 
 class ChatRequest(BaseModel):
@@ -100,6 +103,14 @@ class ChatRequest(BaseModel):
         default=None,
         description="recipe-specific payload.",
     )
+    attachments: list[FileAttachment] = Field(
+        default_factory=list,
+        description="Files attached by the user from the Explorer or attachment UI.",
+    )
+    model: str | None = Field(
+        default=None,
+        description="Optional: model override for this request (e.g. 'gpt-4.1', 'o3').",
+    )
 
 
 class ChatReply(BaseModel):
@@ -135,8 +146,8 @@ async def chat(req: ChatRequest) -> ChatReply:
     except WorkspaceViolation as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    cad_file_path = _resolve_cad_file_ref(req, root)
-    docx_extras = _extract_docx_review_extras(req, root)
+    # Structural detection — inject context into prompt
+    prompt = _build_prompt(req, root)
 
     if req.engine:
         _log.warning("deprecated: ignoring legacy field engine=%s", req.engine)
@@ -146,11 +157,11 @@ async def chat(req: ChatRequest) -> ChatReply:
     try:
         result: ChatResult = await asyncio.to_thread(
             run_chat,
-            message=req.message,
+            message=prompt,
             workspace_root=str(root),
             session_id=req.session_id,
-            cad_file_path=cad_file_path,
-            docx_extras=docx_extras,
+            attachments=_resolve_attachments(req, root),
+            model=req.model,
         )
     except AgentConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -176,6 +187,73 @@ def select_chat_mode(req: ChatRequest) -> ChatMode:
     if env_mode in {"single", "multi", "echo"}:
         return env_mode
     return "echo"
+
+
+# --- Prompt assembly (route-layer context injection) ──────────────────
+
+
+def _build_prompt(req: ChatRequest, root: Path) -> str:
+    """Build a unified prompt with injected file context.
+
+    Route layer does structural detection (fast, reliable) and injects
+    the results into the prompt. The router agent reads the enriched
+    prompt and decides which agent to hand off to.
+    """
+    parts: list[str] = []
+
+    # Legacy paths: dxf_text, cad_source_uri, docx_path, message tokens
+    cad_file_path = _resolve_cad_file_ref(req, root)
+    if cad_file_path:
+        parts.append(f"[检测到CAD文件] 路径: {cad_file_path}")
+
+    docx_extras = _extract_docx_review_extras(req, root)
+    if docx_extras:
+        docx_prompt = _build_docx_section(docx_extras)
+        parts.append(docx_prompt)
+
+    # Attachment-based detection: check attachments for CAD/DOCX
+    for att in req.attachments:
+        rel = att.rel_path or _uri_to_workspace_relative(att.uri, root)
+        if not rel:
+            continue
+        ext = Path(rel).suffix.lower()
+
+        # Skip if already detected via legacy paths
+        if ext in {".dxf", ".dwg"} and not cad_file_path:
+            try:
+                target = resolve_within(str(root), rel)
+            except WorkspaceViolation:
+                continue
+            if target.is_file():
+                parts.append(f"[检测到CAD文件] 路径: {rel}")
+                cad_file_path = rel  # prevent duplicate detection
+
+        elif ext == ".docx" and not docx_extras:
+            try:
+                target = resolve_within(str(root), rel)
+            except WorkspaceViolation:
+                continue
+            if target.is_file():
+                try:
+                    docx_extras = _parse_docx_file(target)
+                    parts.append(_build_docx_section(docx_extras))
+                except HTTPException:
+                    pass
+
+    parts.append(req.message)
+    return "\n\n".join(parts)
+
+
+def _build_docx_section(docx_extras: dict[str, Any]) -> str:
+    from ..docx import format_docx_content
+
+    content = docx_extras["docx_content"]
+    source = docx_extras.get("docx_source", "unknown")
+    formatted = format_docx_content(content)
+    return (
+        f"[检测到Word文档] 来源: {source}\n\n"
+        f"### Word 文档内容\n\n{formatted}"
+    )
 
 
 # --- CAD detection (path-based, supports .dxf + .dwg) ----------------
@@ -349,3 +427,36 @@ def _parse_docx_file(target: Path) -> dict[str, Any]:
             status_code=422, detail=f"文档解析失败: {exc}"
         ) from exc
     return {"docx_content": content, "docx_source": str(target)}
+
+
+# --- Attachments (Explorer / attachment UI) ----------------------------
+
+
+def _resolve_attachments(req: ChatRequest, root: Path) -> list[dict[str, Any]]:
+    """Resolve file attachments from the request.
+
+    Returns a list of dicts with ``rel_path`` (workspace-relative) and ``name``.
+    Files that cannot be resolved within the workspace are silently skipped.
+    """
+    if not req.attachments:
+        return []
+
+    result: list[dict[str, Any]] = []
+    for att in req.attachments:
+        rel = att.rel_path
+        if not rel:
+            rel = _uri_to_workspace_relative(att.uri, root)
+        if not rel:
+            _log.debug("attachment skipped (not in workspace): %s", att.uri)
+            continue
+        # Validate within workspace
+        try:
+            target = resolve_within(str(root), rel)
+        except WorkspaceViolation:
+            _log.debug("attachment skipped (path escape): %s", rel)
+            continue
+        if not target.is_file():
+            _log.debug("attachment skipped (not a file): %s", rel)
+            continue
+        result.append({"rel_path": rel, "name": att.name})
+    return result

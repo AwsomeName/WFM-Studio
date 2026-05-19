@@ -6,6 +6,7 @@ import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { Schemas } from '../../../../base/common/network.js';
+import { listenStream } from '../../../../base/common/stream.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { asJson, IRequestService } from '../../../../platform/request/common/request.js';
 import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
@@ -15,6 +16,8 @@ import {
 	IWfmAgentClientService,
 	IWfmChatExtras,
 	IWfmExternalChatSubmission,
+	IWfmFileAttachment,
+	IWfmStreamCallbacks,
 } from '../common/wfmAgentClient.js';
 
 // 注意：写死 127.0.0.1 而不是 localhost。macOS 上 localhost 优先解析到 ::1 (IPv6)，
@@ -33,13 +36,17 @@ interface IRawChatReply {
 	readonly content: string;
 	readonly workspace_root: string;
 	readonly received_at: string;
+	readonly session_id?: string;
 }
 
 interface IRawChatRequestBody {
 	readonly workspace_root: string;
 	readonly message: string;
+	readonly session_id?: string;
 	readonly dxf_text?: string;
 	readonly dxf_source_uri?: string;
+	readonly model?: string;
+	readonly attachments?: { readonly uri: string; readonly name: string; readonly rel_path?: string }[];
 }
 
 export class WfmAgentClientService extends Disposable implements IWfmAgentClientService {
@@ -60,6 +67,12 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 	readonly onExternalChatPrefill: Event<string> =
 		this._onExternalChatPrefill.event;
 
+	private readonly _onExternalChatAttach = this._register(
+		new Emitter<IWfmFileAttachment[]>(),
+	);
+	readonly onExternalChatAttach: Event<IWfmFileAttachment[]> =
+		this._onExternalChatAttach.event;
+
 	constructor(
 		@IRequestService private readonly requestService: IRequestService,
 		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
@@ -73,6 +86,7 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 		message: string,
 		extras?: IWfmChatExtras,
 		token: CancellationToken = CancellationToken.None,
+		sessionId?: string,
 	): Promise<IWfmAgentChatReply> {
 		const workspaceRoot = this.getWorkspaceRoot();
 		if (!workspaceRoot) {
@@ -82,8 +96,16 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 		const payload: IRawChatRequestBody = {
 			workspace_root: workspaceRoot,
 			message,
+			...(sessionId ? { session_id: sessionId } : {}),
 			...(extras?.dxfText ? { dxf_text: extras.dxfText } : {}),
 			...(extras?.dxfSourceUri ? { dxf_source_uri: extras.dxfSourceUri } : {}),
+			...(extras?.attachments?.length ? {
+				attachments: extras.attachments.map(a => ({
+					uri: a.uri,
+					name: a.name,
+					...(a.relPath ? { rel_path: a.relPath } : {}),
+				})),
+			} : {}),
 		};
 		const body = JSON.stringify(payload);
 		this.logService.trace(
@@ -115,13 +137,134 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 			content: raw.content,
 			workspaceRoot: raw.workspace_root,
 			receivedAt: raw.received_at,
+			sessionId: raw.session_id,
 		};
 	}
 
+	async chatStream(
+		message: string,
+		extras: IWfmChatExtras | undefined,
+		token: CancellationToken,
+		sessionId: string | undefined,
+		callbacks: IWfmStreamCallbacks,
+		model?: string,
+	): Promise<void> {
+		const workspaceRoot = this.getWorkspaceRoot();
+		if (!workspaceRoot) {
+			throw new Error('WFM Studio: 请先打开一个文件夹作为工作区（File → Open Folder）。');
+		}
+
+		const payload: IRawChatRequestBody = {
+			workspace_root: workspaceRoot,
+			message,
+			...(sessionId ? { session_id: sessionId } : {}),
+			...(extras?.dxfText ? { dxf_text: extras.dxfText } : {}),
+			...(extras?.dxfSourceUri ? { dxf_source_uri: extras.dxfSourceUri } : {}),
+			...(model ? { model } : {}),
+			...(extras?.attachments?.length ? {
+				attachments: extras.attachments.map(a => ({
+					uri: a.uri,
+					name: a.name,
+					...(a.relPath ? { rel_path: a.relPath } : {}),
+				})),
+			} : {}),
+		};
+		const body = JSON.stringify(payload);
+		this.logService.trace(
+			`[wfm] POST ${this.baseUrl}/v1/chat/stream (workspace=${workspaceRoot})`,
+		);
+
+		const context = await this.requestService.request({
+			type: 'POST',
+			url: `${this.baseUrl}/v1/chat/stream`,
+			headers: {
+				'Content-Type': 'application/json',
+				'Accept': 'text/event-stream',
+			},
+			data: body,
+			callSite: 'wfm.agentClient.chatStream',
+		}, token);
+
+		const status = context.res.statusCode ?? 0;
+		if (status < 200 || status >= 300) {
+			const text = await asJson<{ detail?: string }>(context).catch(() => null);
+			const detail = text?.detail ?? `HTTP ${status}`;
+			throw new Error(`WFM Studio 后端错误: ${detail}`);
+		}
+
+		await new Promise<void>((resolve, reject) => {
+			let buffer = '';
+
+			listenStream(context.stream, {
+				onData: (vsBuffer) => {
+					if (token.isCancellationRequested) {
+						return;
+					}
+					buffer += vsBuffer.toString();
+					while (true) {
+						const frameEnd = buffer.indexOf('\n\n');
+						if (frameEnd === -1) {
+							break;
+						}
+						const frame = buffer.substring(0, frameEnd);
+						buffer = buffer.substring(frameEnd + 2);
+						for (const line of frame.split('\n')) {
+							if (!line.startsWith('data: ')) {
+								continue;
+							}
+							try {
+								const json: { type: string; [key: string]: unknown } = JSON.parse(line.substring(6));
+								this.dispatchSseEvent(json, callbacks);
+							} catch (e) {
+								this.logService.warn(`[wfm] SSE parse error: ${e}`);
+							}
+						}
+					}
+				},
+				onError: (err) => {
+					this.logService.warn(`[wfm] SSE stream error: ${err}`);
+					callbacks.onError(err.message || String(err));
+					reject(err);
+				},
+				onEnd: () => {
+					resolve();
+				},
+			}, token);
+		});
+	}
+
+	private dispatchSseEvent(
+		json: { type: string; [key: string]: unknown },
+		cb: IWfmStreamCallbacks,
+	): void {
+		switch (json.type) {
+			case 'session':
+				cb.onSession?.((json.session_id as string | null) ?? null);
+				break;
+			case 'text_delta':
+				cb.onTextDelta((json.delta as string) ?? '');
+				break;
+			case 'tool_call_started':
+				cb.onToolCallStarted(json.id as string, json.name as string);
+				break;
+			case 'tool_call_done':
+				cb.onToolCallDone(json.id as string);
+				break;
+			case 'agent_handoff':
+				cb.onAgentHandoff(json.agent as string);
+				break;
+			case 'done':
+				cb.onDone((json.session_id as string | null) ?? null, (json.text as string) ?? '');
+				break;
+			case 'error':
+				cb.onError((json.error as string) ?? 'Unknown error');
+				break;
+			default:
+				this.logService.trace(`[wfm] unknown SSE event type: ${json.type}`);
+		}
+	}
+
 	async submitExternalChat(submission: IWfmExternalChatSubmission): Promise<void> {
-		// 先把右侧任务对话面板打开 / focus。openView 会触发 view 实例化，
-		// 进而触发 view 构造里对 onExternalChatSubmission 的订阅；只有这一步
-		// 完成后 fire 才能被 view 接到（首次冷启动场景）。
 		try {
 			await this.viewsService.openView(WFM_CHAT_VIEW_ID, /*focus*/ false);
 		} catch (err) {
@@ -139,6 +282,15 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 		this._onExternalChatPrefill.fire(text);
 	}
 
+	async attachFiles(files: IWfmFileAttachment[]): Promise<void> {
+		try {
+			await this.viewsService.openView(WFM_CHAT_VIEW_ID, /*focus*/ true);
+		} catch (err) {
+			this.logService.warn(`[wfm] openView(${WFM_CHAT_VIEW_ID}) failed: ${err}`);
+		}
+		this._onExternalChatAttach.fire(files);
+	}
+
 	async ping(token: CancellationToken = CancellationToken.None): Promise<boolean> {
 		try {
 			const context = await this.requestService.request({
@@ -154,11 +306,6 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 		}
 	}
 
-	/**
-	 * Returns the first workspace folder as an absolute filesystem path, or
-	 * undefined when no folder is open (empty workbench / untitled workspace
-	 * without folders).
-	 */
 	private getWorkspaceRoot(): string | undefined {
 		if (this.workspaceService.getWorkbenchState() === WorkbenchState.EMPTY) {
 			return undefined;
@@ -169,8 +316,6 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 		}
 		const uri = folders[0].uri;
 		if (uri.scheme !== Schemas.file) {
-			// Only local disk workspaces are supported for Step B. Remote /
-			// vscode-vfs workspaces will need a dedicated protocol later.
 			return undefined;
 		}
 		return uri.fsPath;

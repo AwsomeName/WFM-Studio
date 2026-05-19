@@ -37,8 +37,8 @@ def resolve_cad_file(path: Path) -> Path:
             return _dwg_to_dxf_via_libredwg(path)
         except Exception:
             raise ToolError(
-                "无法解析 .dwg 文件。请安装 LibreDWG: `brew install libredwg`，"
-                "或用桌面 CAD 软件导出为 .dxf 后再试。"
+                "无法解析 .dwg 文件。请在 third_party/libredwg/bin/ 下放置对应平台的 "
+                "dwg2dxf 二进制，或安装 LibreDWG 到系统 PATH。"
             ) from None
     raise ToolError(f"不支持的文件格式: {path.suffix}")
 
@@ -66,8 +66,42 @@ def _dwg_to_dxf_via_ezdxf(dwg_path: Path) -> Path:
     return Path(tmp.name)
 
 
+def _find_dwg2dxf() -> str:
+    """查找 dwg2dxf 可执行文件：优先项目内 bundled 二进制，再找系统 PATH。"""
+    import sys as _sys  # noqa: PLC0415
+
+    # 1. 项目内 bundled: third_party/libredwg/bin/<platform>/dwg2dxf[.exe]
+    if _sys.platform == "win32":
+        plat_dir, exe_name = "windows", "dwg2dxf.exe"
+    elif _sys.platform == "darwin":
+        plat_dir, exe_name = "macos", "dwg2dxf"
+    else:
+        plat_dir, exe_name = "linux", "dwg2dxf"
+
+    pkg_root = Path(__file__).resolve().parents[2]  # wfm-agents/
+    bundled = pkg_root.parent / "third_party" / "libredwg" / "bin" / plat_dir / exe_name
+    if bundled.is_file():
+        return str(bundled)
+
+    # 2. 系统 PATH
+    import shutil  # noqa: PLC0415
+
+    system = shutil.which("dwg2dxf")
+    if system:
+        return system
+
+    return ""
+
+
 def _dwg_to_dxf_via_libredwg(dwg_path: Path) -> Path:
     """LibreDWG CLI (dwg2dxf) 转换 DWG → DXF。"""
+    cli = _find_dwg2dxf()
+    if not cli:
+        raise ToolError(
+            "dwg2dxf 未找到。请在 third_party/libredwg/bin/ 下放置对应平台的二进制，"
+            "或安装 LibreDWG 到系统 PATH。"
+        )
+
     tmp = tempfile.NamedTemporaryFile(
         suffix=".dxf",
         prefix="wfm_cad_libredwg_",
@@ -76,14 +110,12 @@ def _dwg_to_dxf_via_libredwg(dwg_path: Path) -> Path:
     tmp.close()
     try:
         subprocess.run(
-            ["dwg2dxf", str(dwg_path), "-o", tmp.name],
+            [cli, str(dwg_path), "-o", tmp.name],
             check=True,
             capture_output=True,
             text=True,
             timeout=60,
         )
-    except FileNotFoundError:
-        raise ToolError("dwg2dxf 未找到。请安装 LibreDWG: brew install libredwg")
     except subprocess.TimeoutExpired:
         raise ToolError("dwg2dxf 转换超时（60 秒）")
     except subprocess.CalledProcessError as exc:

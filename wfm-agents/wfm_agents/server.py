@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -38,6 +39,13 @@ def _load_env_file() -> None:
 
 
 _load_env_file()
+
+# Disable OpenAI Agents SDK tracing unless explicitly enabled.
+# The SDK's trace exporter expects OPENAI_API_KEY to be set for
+# exporting to OpenAI's platform — we use a different provider
+# (DashScope / GLM / etc.), so tracing just produces noisy warnings.
+if not os.environ.get("OPENAI_AGENTS_DISABLE_TRACING"):
+    os.environ["OPENAI_AGENTS_DISABLE_TRACING"] = "true"
 
 
 def create_app() -> FastAPI:

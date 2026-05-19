@@ -130,7 +130,6 @@ def cad_generate_step(
         except WorkspaceViolation as exc:
             return f"Error: {exc}"
         cmd += ["--stl", str(stl)]
-    cmd.append("--skip-explorer")
 
     return _run_cad_subprocess(cmd, root)
 
@@ -184,12 +183,12 @@ def cad_render(
     width: int = 1400,
     height: int = 900,
 ) -> str:
-    """Render a STEP/GLB model to a PNG or SVG image.
+    """Render a STEP model to a PNG image.
 
     Args:
-        input_path: Workspace-relative STEP/GLB path or @cad[...] reference.
-        output_path: Workspace-relative output PNG/SVG path.
-        camera: Camera preset (iso, front, top, etc.). Default 'iso'.
+        input_path: Workspace-relative STEP path.
+        output_path: Workspace-relative output PNG path.
+        camera: Camera preset (iso, front, top, right, left, back, bottom). Default 'iso'.
         width: Output image width. Default 1400.
         height: Output image height. Default 900.
     """
@@ -201,20 +200,16 @@ def cad_render(
         return f"Error: {exc}"
 
     cmd = [
-        _python_bin(),
-        str(_cad_skill_dir() / "scripts" / "render"),
-        "view",
-        str(src),
-        "--camera",
-        camera,
-        "-o",
-        str(dst),
-        "--width",
-        str(width),
-        "--height",
-        str(height),
+        _python_bin(), str(_cad_skill_dir() / "scripts" / "render"),
+        "view", str(src),
+        "--camera", camera,
+        "--width", str(width),
+        "--height", str(height),
+        "-o", str(dst),
     ]
-    _run_cad_subprocess(cmd, root, timeout=60)
+    result = _run_cad_subprocess(cmd, root, timeout=120)
+    if result.startswith("Error:"):
+        return result
     return f"Rendered to {output_path}"
 
 
@@ -247,6 +242,71 @@ def cad_export_dxf(
     return _run_cad_subprocess(cmd, root, timeout=60)
 
 
+# ── CAD format conversion tool ───────────────────────────────────────
+
+
+@function_tool
+def cad_convert_format(
+    ctx: RunContextWrapper,
+    source_path: str,
+    output_path: str | None = None,
+) -> str:
+    """将 DWG 文件转换为 DXF 格式。
+
+    Args:
+        source_path: 工作区相对路径或绝对路径，如 'drawings/总布置图.dwg'。
+        output_path: 可选，输出的 DXF 文件路径。默认保存到源文件同目录，后缀改为 .dxf。
+    """
+    from ..cad.dwg import ToolError, resolve_cad_file  # noqa: PLC0415
+
+    root = ctx.context.workspace_root
+    p = Path(source_path)
+
+    if p.is_absolute():
+        src = p
+    else:
+        try:
+            src = resolve_within(root, source_path)
+        except WorkspaceViolation as exc:
+            return f"Error: {exc}"
+
+    if not src.is_file():
+        return f"Error: 文件不存在: {source_path}"
+
+    if src.suffix.lower() not in (".dwg", ".dxf"):
+        return f"Error: 不支持的格式: {src.suffix}，仅支持 .dwg 和 .dxf"
+
+    if src.suffix.lower() == ".dxf":
+        return f"文件已经是 DXF 格式: {source_path}"
+
+    try:
+        converted = resolve_cad_file(src)
+    except ToolError as exc:
+        return f"Error: {exc}"
+    except Exception as exc:
+        return f"Error: 转换失败: {exc}"
+
+    if output_path:
+        dst = Path(output_path)
+        if not dst.is_absolute():
+            try:
+                dst = resolve_within(root, output_path)
+            except WorkspaceViolation as exc:
+                return f"Error: {exc}"
+    else:
+        dst = src.with_suffix(".dxf")
+
+    try:
+        import shutil  # noqa: PLC0415
+
+        shutil.move(str(converted), str(dst))
+    except OSError as exc:
+        return f"Error: 保存文件失败: {exc}"
+
+    rel = dst.relative_to(root) if dst.is_relative_to(root) else str(dst)
+    return f"转换完成: {rel}"
+
+
 # ── DOCX tools ────────────────────────────────────────────────────────
 
 
@@ -256,7 +316,7 @@ def docx_read(
 ) -> str:
     """读取并解析工作区内的 .docx 文件，提取段落和表格的完整内容。
 
-    Args:
+    Args：
         path: 工作区相对路径，如 'docs/投标文件.docx'。
         extract_tables_only: 仅提取表格（跳过段落），适用于金额核对场景。
     """
@@ -291,7 +351,7 @@ def docx_read(
 
 # ── Exported tool lists for agents ────────────────────────────────────
 
-builtin_tools = [workspace_read, workspace_write]
+builtin_tools = [workspace_read, workspace_write, cad_convert_format]
 docx_tools = [workspace_read, workspace_write, docx_read]
 cad_tools = [
     workspace_read,

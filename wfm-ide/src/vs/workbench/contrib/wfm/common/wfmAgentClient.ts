@@ -13,6 +13,7 @@ export interface IWfmAgentChatReply {
 	readonly content: string;
 	readonly workspaceRoot: string;
 	readonly receivedAt: string;
+	readonly sessionId?: string;
 }
 
 /**
@@ -25,6 +26,18 @@ export interface IWfmChatExtras {
 	readonly dxfText?: string;
 	/** dxfText 的来源 URI（仅审计标识，不做磁盘解析）。 */
 	readonly dxfSourceUri?: string;
+	/** 用户从 Explorer 或附件 UI 附加的文件列表。 */
+	readonly attachments?: IWfmFileAttachment[];
+}
+
+/** 用户从 Explorer / 附件 UI 附加的文件。 */
+export interface IWfmFileAttachment {
+	/** 文件 URI（file://）。 */
+	readonly uri: string;
+	/** 文件名（如 "report.docx"）。 */
+	readonly name: string;
+	/** 工作区相对路径（可选，显示用）。 */
+	readonly relPath?: string;
 }
 
 /**
@@ -38,6 +51,18 @@ export interface IWfmExternalChatSubmission {
 	readonly extras?: IWfmChatExtras;
 	/** 用于 UI 展示「来自 xxx.dxf」的标签，可选。 */
 	readonly originLabel?: string;
+}
+
+// ── SSE streaming callbacks ──────────────────────────────────────────
+
+export interface IWfmStreamCallbacks {
+	onSession?(sessionId: string | null): void;
+	onTextDelta(delta: string): void;
+	onToolCallStarted(id: string, name: string): void;
+	onToolCallDone(id: string): void;
+	onAgentHandoff(agent: string): void;
+	onDone(sessionId: string | null, text: string): void;
+	onError(error: string): void;
 }
 
 export interface IWfmAgentClientService {
@@ -63,7 +88,22 @@ export interface IWfmAgentClientService {
 		message: string,
 		extras?: IWfmChatExtras,
 		token?: CancellationToken,
+		sessionId?: string,
 	): Promise<IWfmAgentChatReply>;
+
+	/**
+	 * SSE streaming version of chat(). Connects to POST /v1/chat/stream
+	 * and dispatches intermediate events (tool calls, agent handoffs,
+	 * text deltas) via callbacks.
+	 */
+	chatStream(
+		message: string,
+		extras: IWfmChatExtras | undefined,
+		token: CancellationToken,
+		sessionId: string | undefined,
+		callbacks: IWfmStreamCallbacks,
+		model?: string,
+	): Promise<void>;
 
 	/**
 	 * Minimal liveness check; returns true iff the backend responds 200 on
@@ -96,4 +136,15 @@ export interface IWfmAgentClientService {
 	 * 预填事件。WfmChatViewPane 订阅后将文本写入输入框并聚焦。
 	 */
 	readonly onExternalChatPrefill: Event<string>;
+
+	/**
+	 * 打开聊天面板并将文件添加到附件区域（不自动发送）。
+	 * 用于 Explorer 右键「发送到 WFM 对话」统一入口。
+	 */
+	attachFiles(files: IWfmFileAttachment[]): Promise<void>;
+
+	/**
+	 * 附件事件。WfmChatViewPane 订阅后将文件渲染为附件标签。
+	 */
+	readonly onExternalChatAttach: Event<IWfmFileAttachment[]>;
 }

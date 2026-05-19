@@ -1,6 +1,6 @@
 # 开发环境与启动基线
 
-> **更新日期**：2026-05-07  
+> **更新日期**：2026-05-19
 > **关联**：`docs/PLAN.md` §3、`scripts/dev.sh`
 
 ---
@@ -199,3 +199,109 @@ dev-bundle 启动时自动同步 `argv.json` / `languagepacks.json` 到 prod 目
 ```
 
 watch 重新覆盖 `out/`，nls.* 产物会被覆盖，不影响下次再跑 `dev-bundle.sh` 重新生成。
+
+---
+
+## 8. 第三方二进制依赖（打包必检）
+
+### 8.1 LibreDWG — DWG→DXF 转换
+
+WFM Studio 的 CAD 审图和格式转换功能依赖 **LibreDWG** 的 `dwg2dxf` 命令行工具将 `.dwg` 文件转换为 `.dxf`。
+
+> ⚠️ **打包前必须检查**：缺少此二进制将导致所有 DWG 文件无法审图和转换。
+
+**二进制存放位置**（已纳入项目目录，无需用户额外安装）：
+
+```
+third_party/libredwg/
+  bin/
+    macos/dwg2dxf            # macOS (x86_64 / arm64 通用)
+    linux/dwg2dxf             # Linux (x86_64)
+    windows/dwg2dxf.exe       # Windows (x86_64)
+```
+
+**查找优先级**（代码见 `wfm-agents/wfm_agents/cad/dwg.py` → `_find_dwg2dxf()`）：
+
+1. 项目内 `third_party/libredwg/bin/<platform>/dwg2dxf` — 优先，打包分发用
+2. 系统 PATH（`shutil.which("dwg2dxf")`） — 兜底，开发环境可用 `brew install libredwg`
+
+**获取二进制**：
+
+```bash
+# macOS (开发环境快捷方式)
+brew install libredwg
+cp "$(which dwg2dxf)" third_party/libredwg/bin/macos/dwg2dxf
+
+# Linux
+sudo apt install libredwg-dev
+cp "$(which dwg2dxf)" third_party/libredwg/bin/linux/dwg2dxf
+
+# Windows
+# 从 https://www.gnu.org/software/libredwg/ 下载 Windows 构建
+# 放置到 third_party/libredwg/bin/windows/dwg2dxf.exe
+```
+
+**源码编译**（如需自行构建）：
+
+```bash
+git clone https://github.com/LibreDWG/libredwg.git
+cd libredwg
+# macOS / Linux
+autoreconf -ivf
+./configure
+make -j$(nproc)
+# 产出: programs/dwg2dxf
+```
+
+### 8.2 打包检查清单
+
+| 检查项 | 命令 | 预期结果 |
+|--------|------|----------|
+| macOS 二进制存在 | `ls third_party/libredwg/bin/macos/dwg2dxf` | 文件存在 |
+| Linux 二进制存在 | `ls third_party/libredwg/bin/linux/dwg2dxf` | 文件存在 |
+| Windows 二进制存在 | `ls third_party/libredwg/bin/windows/dwg2dxf.exe` | 文件存在 |
+| 二进制可执行 (macOS) | `third_party/libredwg/bin/macos/dwg2dxf --version` | 输出版本号 |
+| DWG 转换可用 | 用一张 DWG 测试图走审图流程 | 正常返回审查结果 |
+
+---
+
+## 9. Text-to-CAD 依赖（3D 模型生成 + 渲染）
+
+Text-to-CAD 功能需要额外的 Python 和 Node.js 依赖。首次使用需执行以下安装步骤。
+
+### 9.1 Python 依赖
+
+```bash
+cd wfm-agents
+uv sync   # 自动安装 build123d, playwright, trimesh（已在 pyproject.toml 中）
+uv run python -m playwright install chromium   # Chromium 浏览器（~170MB）
+```
+
+### 9.2 Three.js（渲染管线依赖）
+
+```bash
+cd third_party/text-to-cad/skills/cad
+mkdir -p explorer && cd explorer
+npm init -y
+npm install three@0.170.0
+```
+
+验证文件存在：
+
+```bash
+ls third_party/text-to-cad/skills/cad/explorer/node_modules/three/build/three.module.js
+ls third_party/text-to-cad/skills/cad/explorer/node_modules/three/examples/jsm/loaders/GLTFLoader.js
+```
+
+### 9.3 渲染管线检查清单
+
+| 检查项 | 命令 | 预期结果 |
+|--------|------|----------|
+| build123d 可导入 | `uv run python -c "import build123d; print('OK')"` | OK |
+| Playwright Chromium 已安装 | `uv run python -m playwright install --dry-run` | 显示 chromium 已安装 |
+| Three.js 存在 | `ls third_party/text-to-cad/skills/cad/explorer/node_modules/three/build/three.module.js` | 文件存在 |
+| trimesh 可导入 | `uv run python -c "import trimesh; print('OK')"` | OK |
+| STEP 生成可用 | `uv run python third_party/text-to-cad/skills/cad/scripts/step --help` | 显示帮助信息 |
+| 渲染可用 | `uv run python third_party/text-to-cad/skills/cad/scripts/render --help` | 显示帮助信息 |
+
+详见 [ARCH_RENDER_PIPELINE.md](ARCH_RENDER_PIPELINE.md)。

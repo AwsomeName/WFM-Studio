@@ -14,15 +14,16 @@
 | `cad_source_uri` | 否 | CAD 文件 URI（支持 .dwg 和 .dxf，右键菜单或消息提取） |
 | `dxf_source_uri` | 否 | 向后兼容，等同 `cad_source_uri` |
 | `docx_path` | 否 | 工作区内 .docx 文件相对路径（DOCX 审阅用） |
+| `attachments` | 否 | 文件附件列表（Explorer / 附件 UI），含 `uri`、`name`、`rel_path` |
 | `session_id` | 否 | 会话 ID（连续对话） |
 | `language` | 否 | `zh-CN`（默认） \| `en` |
-| `recipe` | 否 | 强制指定 recipe（`plain_chat` / `cad_review` / `echo`） |
+| `recipe` | 否 | 已废弃（Router Agent 自行判断意图） |
 | `mode` | 否 | 已废弃（接受但忽略） |
 | `engine` | 否 | 已废弃（接受但忽略） |
 
 响应除正文外还包含 `session_id` 和 `trace_id`（便于日志与评测）。
 
-> **2026-05 agent_v2 迁移**：对话后端已切到 OpenAI Agents SDK（`agent_v2/`）。`engine` 和 `mode` 字段不再影响路由选择，后端统一由 `agent_v2.runner` 处理。详见 [`docs/WHY_AGENTS_SDK.md`](WHY_AGENTS_SDK.md)。
+> **2026-05 agent_v2 v2.0 迁移**：对话后端已切到 Router Agent + Handoff 架构。所有请求统一发给 `router_agent`，由 LLM 根据意图决定 handoff 到专用 Agent（text_to_cad / cad_review / docx_review）。`engine`、`mode`、`recipe` 字段不再影响路由选择。详见 [`docs/ARCH_AGENT_SDK_NATIVE.md`](ARCH_AGENT_SDK_NATIVE.md)。
 
 ---
 
@@ -36,9 +37,13 @@
 | 操作 | 在「任务对话」输入任意非空消息并发送 |
 | 期望 | 收到助手回复；若 `mode` 为默认 `echo`，应答为 echo 类结果（见后端 `recipe_id` / `wfm.echo`） |
 
-**API**：`POST /v1/chat`，仅需 `workspace_root` + `message`（与当前 [WfmAgentClientService](wfm-ide/src/vs/workbench/contrib/wfm/browser/wfmAgentClientService.ts) 一致）。
+**API**：`POST /v1/chat/stream`（SSE 流式），仅需 `workspace_root` + `message`（与当前 [WfmAgentClientService](wfm-ide/src/vs/workbench/contrib/wfm/browser/wfmAgentClientService.ts) 一致）。IDE 优先走 SSE 流式端点，实时展示回复；若流式失败自动降级到 `POST /v1/chat` 同步端点。
 
-**前端**：无需新增字段；可后续在辅助栏展示 `trace_id` 便于排错。
+**前端 SSE 流式展示**：
+- 助手消息实时流式渲染，带闪烁光标和脉冲圆点
+- 中间步骤可视化：Agent 切换（"调用 Agent: CAD 审图"）、工具调用（"读取文件..." → "读取文件 ✓"）
+- 执行完成后活动日志折叠为摘要行（如 "5 步完成"），点击可展开查看详情
+- 工具名自动映射为中文显示名
 
 ---
 
@@ -52,14 +57,12 @@
 | 操作 | 发送明确任务（例如「在 README 末尾加一行今日日期」） |
 | 期望 | 返回可读的执行摘要或变更说明；工具若启用，应在工作区内产生真实变更（依工具策略） |
 
-**API**：`POST /v1/chat`，body 默认不需要传 `engine`（默认即 `openai`）。模型与 base_url 由后端 env 决定，前端无感知。
+**API**：`POST /v1/chat/stream`（SSE 流式），body 默认不需要传 `engine`（默认即 `openai`）。模型与 base_url 由后端 env 决定，前端无感知。IDE 实时展示 Agent 执行步骤和流式文本。
 
-**回退到 CrewAI**：显式 `engine: "crewai"`，需要 `WFM_CREWAI_MODEL` 等环境变量（按需 `uv sync --extra crewai` —— 当前 crewai 仍在主依赖，无需额外步骤）。
-
-**前端缺口**：
-
-- 请求体增加可选 **`engine`** / **`mode`**（IDE 设置或下拉），未传则跟随后端默认（`openai`）。
-- UI：区分「只读 echo」与「真正调用 LLM」的视觉提示（默认引擎切到 openai 后，每次发消息都会真调 LLM 与消耗 token）。
+**前端 SSE 已打通**：
+- 工具调用步骤实时显示（读取文件、写入文件等），带 loading → ✓ 状态切换
+- Agent 切换时显示 "调用 Agent: xxx"
+- 文本增量流式输出
 
 ---
 
@@ -100,7 +103,7 @@
 | 操作 1 | Explorer 双击 .dwg 或 .dxf |
 | 期望 1 | 中央区直接出现 cad-viewer：可平移/缩放/选实体/切图层/查图层统计；首次加载 1-2 秒下载 viewer bundle |
 | 操作 2A | 在 viewer 工具栏点「AI 审图」按钮 |
-| 期望 2A | viewer 把 in-browser 解析得到的 DXF 文本通过 IPC 送到 `POST /v1/chat`（带 `dxf_text` 字段）→ route 层写临时文件 → `cad_review_agent` 通过 8 个工具自主审图 → 右侧任务对话出现回复 |
+| 期望 2A | viewer 把 in-browser 解析得到的 DXF 文本通过 IPC 送到 `POST /v1/chat/stream`（SSE 流式，带 `dxf_text` 字段）→ route 层写临时文件 → `cad_review_agent` 通过 8 个工具自主审图 → 右侧任务对话实时展示每个工具调用步骤和流式审图意见 |
 | 操作 2B（兼容路径） | 在「任务对话」直接输入：`审一下 <相对路径>.dwg` |
 | 期望 2B | 后端 chat 路由识别到 .dwg token → `_resolve_cad_file_ref` → 后端 DWG→DXF 转换 → `cad_review_agent` 通过工具自主审图 |
 
@@ -130,3 +133,64 @@
 - @文件自动补全
 - 多模态视觉补充（截图喂 GPT-4V）
 - 批量审图 + issue 持久化
+
+---
+
+## 用户故事 5：自然语言生成 3D CAD 模型（Text-to-CAD）
+
+**作为**工程师，**我要**在任务对话中输入一句自然语言描述，系统自动生成对应的 STEP 3D 模型并渲染预览图，**以便**快速创建标准零件。
+
+| 环节 | 行为 |
+|------|------|
+| 前置 | 后端已起；`build123d` + `playwright` + `trimesh` 依赖已安装；third_party/text-to-cad Three.js 已就位 |
+| 操作 | 在「任务对话」输入：「生成一个 M10 六角螺栓」 |
+| 期望 | router_agent 识别意图 → handoff 到 text_to_cad_agent → 生成 build123d 源码 → 编译 STEP → 渲染 PNG → 返回文件路径 |
+
+**完整流程**（4 个 API 往返，`max_turns=15`）：
+
+```
+用户: "生成一个半径5mm的球体"
+  → router_agent: 识别为 CAD 建模意图
+  → handoff → text_to_cad_agent
+  → workspace_write: cad_generated/sphere_r5.py (build123d 源码)
+  → cad_generate_step: scripts/step → sphere_r5.step + .sphere_r5.step.glb
+  → cad_render: scripts/render view → sphere_r5.png (Playwright + Three.js WebGL)
+  → 返回: 源文件路径 + STEP 路径 + 预览图路径
+```
+
+**API**：`POST /v1/chat` 或 `POST /v1/chat/stream`，仅需 `workspace_root` + `message`。无需传 `recipe` 或 `engine`——Router Agent 自动识别。
+
+**SSE 事件流**（流式接口，IDE 实时渲染）：
+
+```
+session → session_id
+agent_handoff → wfm.router
+tool_call_started → transfer_to_text_to_cad
+agent_handoff → text_to_cad              → IDE 显示 "调用 Agent: 3D 模型生成"
+text_delta → "我来为您生成..."            → IDE 流式显示文本
+tool_call_started → workspace_write       → IDE 显示 "⟳ 写入文件..."
+tool_call_done                           → IDE 显示 "✓ 写入文件 ✓"
+tool_call_started → cad_generate_step     → IDE 显示 "⟳ 生成 STEP 模型..."
+tool_call_done                           → IDE 显示 "✓ 生成 STEP 模型 ✓"
+tool_call_started → cad_render            → IDE 显示 "⟳ 渲染预览..."
+tool_call_done                           → IDE 显示 "✓ 渲染预览 ✓"
+text_delta → 结果汇总
+done → 最终文本，活动日志折叠
+```
+
+**依赖**：
+
+| 依赖 | 大小 | 安装方式 |
+|------|------|----------|
+| build123d（含 OCP） | ~100MB | `uv add build123d` |
+| Playwright + Chromium | ~170MB | `uv add playwright && python -m playwright install chromium` |
+| Three.js | ~5MB | `cd third_party/text-to-cad/skills/cad/explorer && npm install three` |
+| trimesh | ~5MB | `uv add trimesh` |
+
+**渲染管线**：详见 [ARCH_RENDER_PIPELINE.md](ARCH_RENDER_PIPELINE.md)。
+
+**限制**：
+- LLM 生成的 build123d 代码质量取决于模型能力；复杂零件可能需要多轮修正
+- `max_turns` 建议 ≤ 20，防止无限重试耗尽 API 配额
+- Chromium 首次冷启动约 2-3 秒
+

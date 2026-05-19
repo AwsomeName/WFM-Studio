@@ -205,10 +205,12 @@ OpenAI-compatible API (GLM-5.1 / gpt-4.1-mini / ...)
 
 | Agent | 名称 | 工具 | 用途 |
 |---|---|---|---|
-| `plain_chat_agent` | `wfm.plain_chat` | `workspace_read`, `workspace_write` | 普通对话 |
-| `cad_review_agent` | `wfm.cad_review` | 无（纯文本输出） | CAD 审图结构化输出 |
+| `router_agent` | `wfm.router` | `workspace_read`, `workspace_write`, `cad_convert_format` | 编排器，自动分发到专用 Agent |
+| `text_to_cad_agent` | `text_to_cad` | `workspace_read`, `workspace_write`, `cad_generate_step`, `cad_inspect`, `cad_render`, `cad_export_dxf` | 3D CAD 建模 |
+| `cad_review_agent` | `cad_review` | 8 个 CAD 审图工具（`cad/tools.py`） | CAD 图纸审查 |
+| `docx_review_agent` | `docx_review` | `docx_read` | Word 文档审阅 |
 
-两个 Agent 共享 `WfmAgentContext` 上下文（携带 `workspace_root`）。`tool_use_behavior="run_llm_again"`：工具执行后自动把结果回传模型继续生成。
+四个 Agent 共享 `WfmAgentContext` 上下文（携带 `workspace_root`）。Router 通过 SDK `handoffs` 列表注册三个专用 Agent，自动根据用户意图分发。`tool_use_behavior="run_llm_again"`：工具执行后自动把结果回传模型继续生成。
 
 ### 3.4 工具注册（`agent_v2/tools.py`）
 
@@ -227,7 +229,7 @@ OpenAI-compatible API (GLM-5.1 / gpt-4.1-mini / ...)
 
 ### 3.5 SSE 事件契约（`agent_v2/sse.py`）
 
-Wire format 与旧版**完全一致**，前端 `EventSource` 消费者无需改动：
+Wire format 与旧版兼容，新增 `agent_handoff` 事件供前端展示 Agent 切换状态：
 
 | 事件 type | payload 关键字段 | 时机 |
 |---|---|---|
@@ -235,6 +237,7 @@ Wire format 与旧版**完全一致**，前端 `EventSource` 消费者无需改�
 | `text_delta` | `delta` | 模型输出文本 |
 | `tool_call_started` | `name`, `id` | 工具调用起 |
 | `tool_call_done` | `id` | 工具调用结束 |
+| `agent_handoff` | `agent` | Agent 切换（Router → 专用 Agent） |
 | `error` | `error` | 任意错误 |
 | `done` | `session_id`, `trace_id`, `text` | 流结束 |
 
@@ -287,7 +290,8 @@ WFM_AGENT_ALLOW_IMAGE         默认 false
 - [x] `POST /v1/cad/review/stream` 审图 SSE 正常
 - [x] 工具调用（`workspace_read` / `workspace_write`）正常
 - [x] 旧 `engine` / `mode` 字段 accepted-but-ignored，warning 日志正常
-- [x] 前端 `EventSource` 消费无变化
+- [x] IDE SSE 流式消费正常（`chatStream()` → 实时展示工具调用、Agent 切换、文本增量）
+- [x] IDE 降级到同步 `chat()` 正常（流式连接异常时自动回退）
 
 ### 4.3 GLM-5.1 兼容性
 
@@ -328,7 +332,7 @@ WFM_AGENT_ALLOW_IMAGE         默认 false
 
 ## 7. 开发约束（现行）
 
-- 遵守 `.cursor/rules/wfm-ide-fork-policy.mdc`：所有改动在 `wfm-agents/` 内部完成，**不动 wfm-ide/**。
+- 遵守 `.cursor/rules/wfm-ide-fork-policy.mdc`：改动限定在 `contrib/wfm/` 下。IDE 端 SSE 流式消费代码位于 `wfm-ide/src/vs/workbench/contrib/wfm/`。
 - `agent_v2/` 代码使用 `from __future__ import annotations`、严格类型注解。
 - 日志走标准库 `logging.getLogger(__name__)`。
 - `agents` 包来源：`third_party/agents/openai-agents-python/`（git subtree）。

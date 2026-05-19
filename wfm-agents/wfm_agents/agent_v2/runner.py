@@ -5,7 +5,8 @@ Wraps the OpenAI Agents SDK ``Runner`` and exposes two functions:
 * ``run_chat()``    — sync, returns a ``ChatResult``.
 * ``run_chat_stream()`` — async, yields SSE frames as ``bytes``.
 
-Routes import only from this module; they never touch the SDK directly.
+All requests go through ``router_agent`` which decides whether to handle
+the request itself or hand off to a specialised agent.
 """
 
 from __future__ import annotations
@@ -29,9 +30,9 @@ from ..agent.config import AgentConfigError, load_config
 from ..cad.review import CadReviewReport, render_markdown
 from ..docx import format_docx_content
 
-from .agents import cad_review_agent, docx_review_agent, plain_chat_agent
+from .agents import router_agent
 from .context import WfmAgentContext
-from .sse import EVENT_DONE, EVENT_ERROR, EVENT_TEXT_DELTA, EVENT_TOOL_CALL_DONE, EVENT_TOOL_CALL_STARTED, encode_sse
+from .sse import EVENT_AGENT_HANDOFF, EVENT_DONE, EVENT_ERROR, EVENT_TEXT_DELTA, EVENT_TOOL_CALL_DONE, EVENT_TOOL_CALL_STARTED, encode_sse
 
 _log = logging.getLogger(__name__)
 
@@ -54,8 +55,12 @@ class ChatResult:
 # ── Config / prompt helpers ───────────────────────────────────────────
 
 
-def _build_run_config() -> tuple[RunConfig, int]:
-    cfg = load_config()
+def _build_run_config(
+    *,
+    model_override: str | None = None,
+    workspace_root: str | None = None,
+) -> tuple[RunConfig, int]:
+    cfg = load_config(model_override=model_override, workspace_root=workspace_root)
     client = AsyncOpenAI(
         api_key=cfg.api_key,
         base_url=cfg.base_url,
@@ -81,6 +86,17 @@ def _build_docx_prompt(docx_extras: dict[str, Any], user_message: str) -> str:
         f"### Word 文档内容 (来源: {source})\n\n{formatted}\n\n"
         f"### 用户问题\n{user_msg}\n"
     )
+
+
+def _inject_attachments(prompt: str, attachments: list[dict[str, Any]]) -> str:
+    """Append attachment file list to prompt so the agent can read them via tools."""
+    lines = ["\n\n### 用户附加的文件"]
+    for att in attachments:
+        rel = att.get("rel_path", att.get("name", "unknown"))
+        lines.append(f"- {rel}")
+    lines.append("请使用 workspace_read 工具读取上述文件来回答用户的问题。\n")
+    lines.append(f"### 用户问题\n{prompt}")
+    return "\n".join(lines)
 
 
 # ── JSON parsing for CAD review (handles code fences from GLM) ────────
@@ -129,6 +145,11 @@ def _count_tool_calls(result: Any) -> int:
     )
 
 
+def _detect_last_agent(result: Any) -> str:
+    """Return the name of the last agent that ran (may differ from router after handoff)."""
+    return getattr(result, "last_agent", router_agent).name
+
+
 # ── Sync entry point ─────────────────────────────────────────────────
 
 
@@ -137,28 +158,19 @@ def run_chat(
     message: str,
     workspace_root: str,
     session_id: str | None = None,
-    cad_file_path: str | None = None,
-    docx_extras: dict[str, Any] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+    model: str | None = None,
 ) -> ChatResult:
     """Run a single chat turn (blocking). Called from route handlers via ``asyncio.to_thread``."""
-    run_config, max_turns = _build_run_config()
+    run_config, max_turns = _build_run_config(model_override=model, workspace_root=workspace_root)
     ctx = WfmAgentContext(workspace_root=workspace_root)
 
-    if cad_file_path is not None:
-        agent = cad_review_agent
-        prompt = (
-            f"请审图，文件路径: {cad_file_path}\n"
-            f"用户要求: {message}"
-        )
-    elif docx_extras is not None:
-        agent = docx_review_agent
-        prompt = _build_docx_prompt(docx_extras, message)
-    else:
-        agent = plain_chat_agent
-        prompt = message
+    prompt = message
+    if attachments:
+        prompt = _inject_attachments(prompt, attachments)
 
     result = Runner.run_sync(
-        starting_agent=agent,
+        starting_agent=router_agent,
         input=prompt,
         context=ctx,
         run_config=run_config,
@@ -166,15 +178,16 @@ def run_chat(
     )
 
     final = result.final_output
-    is_cad = cad_file_path is not None
-    if is_cad and isinstance(final, str):
+    report = None
+
+    # If the last agent was cad_review, try to parse structured JSON
+    if _detect_last_agent(result) == "cad_review" and isinstance(final, str):
         content, report = _parse_cad_review(final)
     elif isinstance(final, CadReviewReport):
         content = render_markdown(final)
         report = final.model_dump()
     else:
-        content = str(final)
-        report = None
+        content = str(final) if final is not None else ""
 
     return ChatResult(
         content=content,
@@ -195,32 +208,23 @@ async def run_chat_stream(
     message: str,
     workspace_root: str,
     session_id: str | None = None,
-    cad_file_path: str | None = None,
-    docx_extras: dict[str, Any] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+    model: str | None = None,
 ) -> AsyncIterator[bytes]:
     """Yield SSE frames as ``bytes``."""
-    run_config, max_turns = _build_run_config()
+    run_config, max_turns = _build_run_config(model_override=model, workspace_root=workspace_root)
     ctx = WfmAgentContext(workspace_root=workspace_root)
 
-    if cad_file_path is not None:
-        agent = cad_review_agent
-        prompt = (
-            f"请审图，文件路径: {cad_file_path}\n"
-            f"用户要求: {message}"
-        )
-    elif docx_extras is not None:
-        agent = docx_review_agent
-        prompt = _build_docx_prompt(docx_extras, message)
-    else:
-        agent = plain_chat_agent
-        prompt = message
+    prompt = message
+    if attachments:
+        prompt = _inject_attachments(prompt, attachments)
 
     # Emit session event first
     yield encode_sse({"type": "session", "session_id": session_id})
 
     try:
         streamed = Runner.run_streamed(
-            starting_agent=agent,
+            starting_agent=router_agent,
             input=prompt,
             context=ctx,
             run_config=run_config,
@@ -228,18 +232,18 @@ async def run_chat_stream(
         )
 
         async for event in streamed.stream_events():
-            if event.type == "run_item_stream_event":
+            if event.type == "raw_response_event":
+                # Real-time text deltas — each token as it arrives
+                raw = event.data
+                if getattr(raw, "type", None) == "response.output_text.delta":
+                    delta = getattr(raw, "delta", "")
+                    if delta:
+                        yield encode_sse({"type": EVENT_TEXT_DELTA, "delta": delta})
+
+            elif event.type == "run_item_stream_event":
                 name = event.name
 
-                if name == "message_output_created":
-                    # Extract text from the message output item
-                    from agents.items import ItemHelpers
-
-                    text = ItemHelpers.text_message_output(event.item)
-                    if text:
-                        yield encode_sse({"type": EVENT_TEXT_DELTA, "delta": text})
-
-                elif name == "tool_called":
+                if name == "tool_called":
                     item = event.item
                     yield encode_sse({
                         "type": EVENT_TOOL_CALL_STARTED,
@@ -254,13 +258,15 @@ async def run_chat_stream(
                         "id": getattr(item, "call_id", "") or "",
                     })
 
+            elif event.type == "agent_updated_stream_event":
+                yield encode_sse({
+                    "type": EVENT_AGENT_HANDOFF,
+                    "agent": event.new_agent.name,
+                })
+
         # Stream complete — emit done
         final = streamed.final_output
-        is_cad = cad_file_path is not None
-        if is_cad and isinstance(final, str):
-            content, _ = _parse_cad_review(final)
-        else:
-            content = str(final) if final is not None else ""
+        content = str(final) if final is not None else ""
 
         yield encode_sse({
             "type": EVENT_DONE,

@@ -99,6 +99,22 @@
 				},
 				"publisherDisplayName": "Microsoft"
 			}
+		},
+		{
+			"name": "battlecook.omni-viewer",
+			"version": "0.24.0",
+			"sha256": "9a9f120d4c22c27c2aa5a8c947c5c73a8447829888f25808ecd8ae9a91fedc14",
+			"repo": "https://github.com/battlecook/omni-viewer",
+			"metadata": {
+				"id": "cbee2032-9632-4276-be4a-836e4efc2f62",
+				"publisherId": {
+					"publisherId": "5f858d3e-888f-4749-9291-2e7fa2cdf67c",
+					"publisherName": "battlecook",
+					"displayName": "battlecook",
+					"flags": "verified"
+				},
+				"publisherDisplayName": "battlecook"
+			}
 		}
 	],
 	"defaultChatAgent": {

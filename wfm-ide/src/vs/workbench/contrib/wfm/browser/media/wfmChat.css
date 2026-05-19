@@ -79,52 +79,397 @@
 .wfm-chat-pane .wfm-chat-composer {
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
+	gap: 6px;
 	flex: 0 0 auto;
+}
+
+/* ── Attachment chips above input ──────────────────────────── */
+
+.wfm-chat-pane .wfm-chat-attachments {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	padding: 0 2px;
+}
+
+.wfm-chat-pane .wfm-attachment-tag {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 2px 8px;
+	font-size: 11px;
+	color: var(--vscode-foreground);
+	background: var(--vscode-badge-background, rgba(255, 255, 255, 0.08));
+	border-radius: 10px;
+	max-width: 240px;
+}
+
+.wfm-chat-pane .wfm-attachment-tag .name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.wfm-chat-pane .wfm-attachment-tag .remove {
+	cursor: pointer;
+	opacity: 0.6;
+	font-size: 13px;
+	line-height: 1;
+}
+
+.wfm-chat-pane .wfm-attachment-tag .remove:hover {
+	opacity: 1;
+}
+
+/* ── Cursor-style rounded input container ──────────────────── */
+
+.wfm-chat-pane .wfm-chat-input-container {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 8px 10px 6px;
+	background: var(--vscode-input-background);
+	border: 1px solid var(--vscode-input-border, var(--vscode-widget-border, rgba(255, 255, 255, 0.08)));
+	border-radius: 10px;
+	transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.wfm-chat-pane .wfm-chat-input-container:focus-within {
+	border-color: var(--vscode-focusBorder);
+	box-shadow: 0 0 0 1px var(--vscode-focusBorder);
 }
 
 .wfm-chat-pane .wfm-chat-input {
 	width: 100%;
-	min-height: 52px;
-	max-height: 180px;
-	resize: vertical;
+	min-height: 44px;
+	max-height: 220px;
+	resize: none;
 	box-sizing: border-box;
-	padding: 4px 6px;
+	padding: 2px 0;
 	color: var(--vscode-input-foreground);
-	background: var(--vscode-input-background);
-	border: 1px solid var(--vscode-input-border, transparent);
-	border-radius: 2px;
+	background: transparent;
+	border: 0;
+	outline: 0;
 	font-family: inherit;
-	font-size: inherit;
+	font-size: 13px;
+	line-height: 1.45;
+}
+
+.wfm-chat-pane .wfm-chat-input::placeholder {
+	color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground));
+	opacity: 0.7;
 }
 
 .wfm-chat-pane .wfm-chat-input:focus {
-	outline: 1px solid var(--vscode-focusBorder);
-	outline-offset: -1px;
+	outline: 0;
 }
 
-.wfm-chat-pane .wfm-chat-actions {
+/* ── Toolbar (single row: selectors on left, actions on right) ── */
+
+.wfm-chat-pane .wfm-chat-toolbar {
 	display: flex;
-	justify-content: flex-end;
+	align-items: center;
+	justify-content: space-between;
 	gap: 6px;
+	min-height: 28px;
+}
+
+.wfm-chat-pane .wfm-chat-toolbar-left,
+.wfm-chat-pane .wfm-chat-toolbar-right {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+/* ── Pill-shaped Agent / Model selectors ───────────────────── */
+
+.wfm-chat-pane .wfm-chat-selector {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	height: 22px;
+	padding: 0 8px;
+	color: var(--vscode-foreground);
+	background: transparent;
+	border: 0;
+	border-radius: 11px;
+	cursor: pointer;
+	font-family: inherit;
+	font-size: 12px;
+	line-height: 1;
+	white-space: nowrap;
+	user-select: none;
+	transition: background 120ms ease;
+}
+
+.wfm-chat-pane .wfm-chat-selector:hover {
+	background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
+}
+
+.wfm-chat-pane .wfm-chat-selector .selector-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 14px;
+	opacity: 0.85;
+	font-size: 13px;
+	line-height: 1;
+}
+
+.wfm-chat-pane .wfm-chat-selector .selector-label {
+	font-weight: 500;
+}
+
+.wfm-chat-pane .wfm-chat-selector .selector-chevron {
+	font-size: 9px;
+	opacity: 0.7;
+	margin-left: 1px;
+}
+
+/* ── Mic + Send action buttons ─────────────────────────────── */
+
+.wfm-chat-pane .wfm-chat-mic,
+.wfm-chat-pane .wfm-chat-send {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	cursor: pointer;
+	font-family: inherit;
+	line-height: 1;
+	transition: background 120ms ease, transform 120ms ease, opacity 120ms ease;
+}
+
+.wfm-chat-pane .wfm-chat-mic {
+	background: transparent;
+	color: var(--vscode-foreground);
+	font-size: 13px;
+	opacity: 0.85;
+}
+
+.wfm-chat-pane .wfm-chat-mic:hover {
+	background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
+	opacity: 1;
 }
 
 .wfm-chat-pane .wfm-chat-send {
-	padding: 3px 12px;
-	color: var(--vscode-button-foreground);
-	background: var(--vscode-button-background);
-	border: 1px solid transparent;
-	border-radius: 2px;
-	cursor: pointer;
-	font-family: inherit;
-	font-size: inherit;
+	background: var(--vscode-foreground);
+	color: var(--vscode-editor-background);
+	font-size: 14px;
+	font-weight: 600;
 }
 
 .wfm-chat-pane .wfm-chat-send:hover:not(:disabled) {
-	background: var(--vscode-button-hoverBackground);
+	transform: scale(1.05);
 }
 
 .wfm-chat-pane .wfm-chat-send:disabled {
-	opacity: 0.5;
+	opacity: 0.45;
 	cursor: default;
+}
+
+.wfm-chat-pane .wfm-chat-send .send-spinner {
+	display: inline-block;
+	width: 12px;
+	height: 12px;
+	border: 1.5px solid currentColor;
+	border-top-color: transparent;
+	border-radius: 50%;
+	animation: wfm-spin 0.8s linear infinite;
+}
+
+/* ── Streaming message ─────────────────────────────────────── */
+
+.wfm-chat-pane .wfm-msg-streaming .wfm-msg-role::after {
+	content: '';
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--vscode-textLink-foreground);
+	margin-left: 6px;
+	vertical-align: middle;
+	animation: wfm-pulse 1.5s ease-in-out infinite;
+}
+
+.wfm-chat-pane .wfm-msg-streaming .wfm-msg-body::after {
+	content: '▍';
+	animation: wfm-blink 1s step-end infinite;
+	color: var(--vscode-foreground);
+}
+
+/* ── Activity log ──────────────────────────────────────────── */
+
+.wfm-chat-pane .wfm-msg-activity {
+	font-size: 11px;
+	opacity: 0.85;
+	margin-bottom: 4px;
+	padding: 4px 0;
+	border-bottom: 1px solid var(--vscode-widget-border, rgba(255,255,255,.08));
+}
+
+.wfm-chat-pane .wfm-activity-item {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 1px 0;
+	white-space: nowrap;
+}
+
+.wfm-chat-pane .wfm-activity-item .codicon {
+	font-size: 12px;
+}
+
+.wfm-chat-pane .wfm-activity-handoff {
+	color: var(--vscode-textLink-foreground);
+}
+
+.wfm-chat-pane .wfm-activity-tool-start .codicon {
+	color: var(--vscode-list-activeSelectionForeground, #3794ff);
+	animation: wfm-spin 1s linear infinite;
+}
+
+.wfm-chat-pane .wfm-activity-tool-done .codicon {
+	color: var(--vscode-terminal-ansiGreen, #89d185);
+}
+
+/* ── Collapsed activity ────────────────────────────────────── */
+
+.wfm-chat-pane .wfm-activity-collapsed .wfm-activity-steps {
+	display: none;
+}
+
+.wfm-chat-pane .wfm-activity-collapsed .wfm-activity-summary {
+	display: block;
+	cursor: pointer;
+	opacity: 0.7;
+}
+
+.wfm-chat-pane .wfm-activity-summary {
+	display: none;
+}
+
+.wfm-chat-pane .wfm-msg-activity:not(.wfm-activity-collapsed) .wfm-activity-summary {
+	display: none;
+}
+
+/* ── Animations ────────────────────────────────────────────── */
+
+@keyframes wfm-pulse {
+	0%, 100% { opacity: 0.4; }
+	50% { opacity: 1; }
+}
+
+@keyframes wfm-blink {
+	0%, 50% { opacity: 1; }
+	51%, 100% { opacity: 0; }
+}
+
+@keyframes wfm-spin {
+	from { transform: rotate(0deg); }
+	to { transform: rotate(360deg); }
+}
+
+/* ── Session tab bar (header) ──────────────────────────────── */
+
+.wfm-chat-header-tabs {
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	overflow-x: auto;
+	overflow-y: hidden;
+	scrollbar-width: none;
+	-ms-overflow-style: none;
+}
+
+.wfm-chat-header-tabs::-webkit-scrollbar {
+	display: none;
+}
+
+.wfm-chat-tab {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	padding: 7px 10px;
+	border-radius: 6px 6px 0 0;
+	cursor: pointer;
+	white-space: nowrap;
+	font-size: 12px;
+	color: var(--vscode-tab-inactiveForeground, var(--vscode-foreground));
+	background: transparent;
+	border: none;
+	border-bottom: 2px solid transparent;
+	transition: background 120ms ease;
+	max-width: 160px;
+}
+
+.wfm-chat-tab:hover {
+	background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
+}
+
+.wfm-chat-tab.active {
+	color: var(--vscode-tab-activeForeground, var(--vscode-foreground));
+	background: var(--vscode-tab-activeBackground, rgba(255, 255, 255, 0.06));
+	border-bottom-color: var(--vscode-focusBorder);
+}
+
+.wfm-chat-tab-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 120px;
+}
+
+.wfm-chat-tab-close {
+	margin-left: 4px;
+	font-size: 13px;
+	line-height: 1;
+	opacity: 0;
+	transition: opacity 100ms ease;
+	border-radius: 3px;
+}
+
+.wfm-chat-tab:hover .wfm-chat-tab-close {
+	opacity: 0.6;
+}
+
+.wfm-chat-tab-close:hover {
+	opacity: 1 !important;
+	background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
+}
+
+.wfm-chat-tab-new,
+.wfm-chat-tab-settings {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	border: none;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--vscode-foreground);
+	font-size: 16px;
+	line-height: 1;
+	cursor: pointer;
+	opacity: 0.75;
+	user-select: none;
+	transition: background 120ms ease, opacity 120ms ease;
+}
+
+.wfm-chat-tab-new {
+	margin-left: auto;
+	font-weight: 600;
+}
+
+.wfm-chat-tab-new:hover,
+.wfm-chat-tab-settings:hover {
+	background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
+	opacity: 1;
 }

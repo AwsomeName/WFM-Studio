@@ -12,10 +12,10 @@ wfm_agents/
 │   ├── __init__.py     # deprecated，仅保留模块声明
 │   └── config.py       # 环境变量加载（agent_v2 仍使用）
 ├── agent_v2/           # ★ 当前运行时
-│   ├── agents.py       # Agent 定义：plain_chat_agent, cad_review_agent
+│   ├── agents.py       # Agent 定义：router_agent (编排器) + text_to_cad / cad_review / docx_review
 │   ├── context.py      # WfmAgentContext(workspace_root)
-│   ├── tools.py        # @function_tool 包装的 6 个内置工具
-│   ├── sse.py          # SSE 事件编码（wire format 与旧版一致）
+│   ├── tools.py        # @function_tool 包装的 workspace + CAD + DOCX 工具
+│   ├── sse.py          # SSE 事件编码（含 agent_handoff 事件）
 │   └── runner.py       # run_chat() / run_chat_stream() — 路由层唯一入口
 ├── cad/                # DXF 解析 / 审图 schema
 ├── gateway/            # [DEPRECATED] 旧 AgentGateway，保留兜底

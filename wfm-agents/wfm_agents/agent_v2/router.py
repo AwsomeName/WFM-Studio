@@ -29,9 +29,11 @@ from ..observability import errors as err_codes
 from ..routes.chat import (
     ChatReply,
     ChatRequest,
+    _resolve_attachments,
     _resolve_cad_file_ref,
 )
 from ..workspace import WorkspaceViolation, resolve_workspace_root
+from .runner import _inject_attachments
 
 from .agents import cad_review_agent, plain_chat_agent
 from .context import WfmAgentContext
@@ -148,6 +150,7 @@ async def chat_v2(req: ChatRequest) -> ChatV2Reply:
 
     # 2. Resolve CAD file path (agent will call tools autonomously)
     cad_file_path = _resolve_cad_file_ref(req, root)
+    attachments = _resolve_attachments(req, root)
 
     # 3. Build RunConfig from the same env vars as the legacy runner
     try:
@@ -168,6 +171,9 @@ async def chat_v2(req: ChatRequest) -> ChatV2Reply:
     else:
         agent = plain_chat_agent
         prompt = req.message
+
+    if attachments:
+        prompt = _inject_attachments(prompt, attachments)
 
     # 5. Run
     try:
