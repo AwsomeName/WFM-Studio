@@ -690,6 +690,22 @@ function patchWin32DependenciesTask(destinationFolderName: string) {
 	};
 }
 
+function copyWfmBackendTask(destinationFolderName: string) {
+	const outputDir = path.join(path.dirname(root), destinationFolderName);
+	return async () => {
+		const resourcesDir = path.join(outputDir, `${product.nameLong}.app`, 'Contents', 'Resources');
+		const backendDir = path.join(resourcesDir, 'wfm-backend');
+		const sourceDir = path.join(path.dirname(root), '.build', 'wfm-backend');
+		if (fs.existsSync(sourceDir)) {
+			console.log(`Copying wfm-backend to ${backendDir}...`);
+			await fs.promises.cp(sourceDir, backendDir, { recursive: true });
+			console.log(`wfm-backend copied (${(await fs.promises.stat(backendDir)).size} bytes)`);
+		} else {
+			console.log('Skipping wfm-backend (not built): run scripts/build-backend.sh first');
+		}
+	};
+}
+
 function copyCopilotNativeDepsTask(platform: string, arch: string, destinationFolderName: string) {
 	const outputDir = path.join(path.dirname(root), destinationFolderName);
 
@@ -733,7 +749,8 @@ BUILD_TARGETS.forEach(buildTarget => {
 			compileNativeExtensionsBuildTask,
 			util.rimraf(path.join(buildRoot, destinationFolderName)),
 			packageTask(platform, arch, sourceFolderName, destinationFolderName, opts),
-			copyCopilotNativeDepsTask(platform, arch, destinationFolderName)
+			copyCopilotNativeDepsTask(platform, arch, destinationFolderName),
+			...(platform === 'darwin' ? [copyWfmBackendTask(destinationFolderName)] : []),
 		];
 
 		if (platform === 'win32') {

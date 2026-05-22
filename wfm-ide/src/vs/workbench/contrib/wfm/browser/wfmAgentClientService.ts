@@ -4,7 +4,7 @@
 
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
-import { Disposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { listenStream } from '../../../../base/common/stream.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
@@ -46,6 +46,7 @@ interface IRawChatRequestBody {
 	readonly dxf_text?: string;
 	readonly dxf_source_uri?: string;
 	readonly model?: string;
+	readonly backend?: string;
 	readonly attachments?: { readonly uri: string; readonly name: string; readonly rel_path?: string }[];
 }
 
@@ -54,6 +55,11 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 	declare readonly _serviceBrand: undefined;
 
 	readonly baseUrl: string = DEFAULT_BASE_URL;
+
+	private _backendReady = false;
+	private readonly _onBackendReady = this._register(new Emitter<boolean>());
+	readonly onBackendReady: Event<boolean> = this._onBackendReady.event;
+	get backendReady(): boolean { return this._backendReady; }
 
 	private readonly _onExternalChatSubmission = this._register(
 		new Emitter<IWfmExternalChatSubmission>(),
@@ -80,6 +86,25 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 		@IViewsService private readonly viewsService: IViewsService,
 	) {
 		super();
+		this._pollBackendReady();
+	}
+
+	private _pollBackendReady(): void {
+		let attempts = 0;
+		const maxAttempts = 30;
+		const interval = setInterval(async () => {
+			attempts++;
+			const ready = await this.ping();
+			if (ready) {
+				this._backendReady = true;
+				this._onBackendReady.fire(true);
+				clearInterval(interval);
+			} else if (attempts >= maxAttempts) {
+				this.logService.warn('[wfm] backend did not become ready after 60s');
+				clearInterval(interval);
+			}
+		}, 2000);
+		this._register(toDisposable(() => clearInterval(interval)));
 	}
 
 	async chat(
@@ -87,6 +112,7 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 		extras?: IWfmChatExtras,
 		token: CancellationToken = CancellationToken.None,
 		sessionId?: string,
+		backend?: string,
 	): Promise<IWfmAgentChatReply> {
 		const workspaceRoot = this.getWorkspaceRoot();
 		if (!workspaceRoot) {
@@ -106,6 +132,7 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 					...(a.relPath ? { rel_path: a.relPath } : {}),
 				})),
 			} : {}),
+		...(backend ? { backend } : {}),
 		};
 		const body = JSON.stringify(payload);
 		this.logService.trace(
@@ -148,6 +175,7 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 		sessionId: string | undefined,
 		callbacks: IWfmStreamCallbacks,
 		model?: string,
+		backend?: string,
 	): Promise<void> {
 		const workspaceRoot = this.getWorkspaceRoot();
 		if (!workspaceRoot) {
@@ -161,6 +189,7 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 			...(extras?.dxfText ? { dxf_text: extras.dxfText } : {}),
 			...(extras?.dxfSourceUri ? { dxf_source_uri: extras.dxfSourceUri } : {}),
 			...(model ? { model } : {}),
+			...(backend ? { backend } : {}),
 			...(extras?.attachments?.length ? {
 				attachments: extras.attachments.map(a => ({
 					uri: a.uri,
@@ -240,6 +269,9 @@ export class WfmAgentClientService extends Disposable implements IWfmAgentClient
 		switch (json.type) {
 			case 'session':
 				cb.onSession?.((json.session_id as string | null) ?? null);
+				break;
+			case 'thinking_delta':
+				cb.onThinkingDelta?.((json.delta as string) ?? '');
 				break;
 			case 'text_delta':
 				cb.onTextDelta((json.delta as string) ?? '');

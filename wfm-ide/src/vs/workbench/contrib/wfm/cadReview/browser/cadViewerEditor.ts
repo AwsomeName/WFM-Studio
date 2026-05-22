@@ -143,6 +143,12 @@ function buildViewerHtml(args: IViewerHtmlArgs): string {
 </div>
 <div id="wfm-cad-layer-panel" hidden></div>
 <div id="wfm-cad-error" hidden></div>
+<div id="wfm-cad-sel-badge" hidden></div>
+<div id="wfm-cad-ctx-menu" hidden>
+	<div class="wfm-cad-ctx-item" data-action="send-selection">发送选中到对话</div>
+	<div class="wfm-cad-ctx-sep"></div>
+	<div class="wfm-cad-ctx-item wfm-cad-ctx-danger" data-action="delete-selection">删除</div>
+</div>
 <script nonce="${nonce}">window.__WFM_CAD__ = ${bootstrapJson};</script>
 <script nonce="${nonce}" src="${cadViewerBundleUri}"></script>
 <script nonce="${nonce}" src="${viewerJsUri}"></script>
@@ -392,6 +398,12 @@ export class CadViewerEditor extends EditorPane {
 					`${LOG_PREFIX} debug[${msg.stage}] ${JSON.stringify(msg.info)}`,
 				);
 				break;
+			case 'sendSelection':
+				this.handleSendSelection(msg.entities, msg.sourceUri, msg.fileName);
+				break;
+			case 'editsApplied':
+				this.handleEditsApplied(msg.dxfText, msg.sourceUri);
+				break;
 		}
 	}
 
@@ -529,6 +541,39 @@ export class CadViewerEditor extends EditorPane {
 	override dispose(): void {
 		this.webview = undefined;
 		super.dispose();
+	}
+
+	private handleSendSelection(
+		entities: ReadonlyArray<{ handle: string; entityType: string; textContent?: string; layer: string; colorIndex?: number }>,
+		sourceUri: string,
+		fileName: string,
+	): void {
+		if (!entities || entities.length === 0) {
+			return;
+		}
+		this.agentClient.attachCadSelection({ entities, sourceUri, fileName });
+	}
+
+	private async handleEditsApplied(dxfText: string, sourceUri: string): Promise<void> {
+		if (!dxfText || !sourceUri) {
+			return;
+		}
+		try {
+			const uri = URI.parse(sourceUri);
+			const encoder = new TextEncoder();
+			await this.fileService.writeFile(uri, encoder.encode(dxfText));
+			this.logService.info(`${LOG_PREFIX} saved modified DXF: ${sourceUri}`);
+		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err);
+			this.notificationService.notify({
+				severity: Severity.Error,
+				message: localize(
+					'wfm.cad.viewer.saveFailed',
+					"保存修改失败: {0}",
+					detail,
+				),
+			});
+		}
 	}
 
 	// 让上面 themeService listener 能引用 currentFileName / dimension 不被 tsc 报 unused。

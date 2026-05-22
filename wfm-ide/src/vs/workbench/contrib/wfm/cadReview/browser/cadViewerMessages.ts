@@ -80,10 +80,37 @@ export interface ICadDebugMessage {
 	readonly info: Record<string, unknown>;
 }
 
+/**
+ * viewer 内右键「发送选中到对话」触发。携带选中实体的元数据。
+ */
+export interface ICadSendSelectionMessage {
+	readonly kind: 'sendSelection';
+	readonly entities: ReadonlyArray<{
+		readonly handle: string;
+		readonly entityType: string;
+		readonly textContent?: string;
+		readonly layer: string;
+		readonly colorIndex?: number;
+	}>;
+	readonly sourceUri: string;
+	readonly fileName: string;
+}
+
+/**
+ * viewer 内实体修改（删除 / 颜色变更）完成后，把新 DXF 文本发回 main 保存。
+ */
+export interface ICadEditsAppliedMessage {
+	readonly kind: 'editsApplied';
+	readonly dxfText: string;
+	readonly sourceUri: string;
+}
+
 export type CadWebviewToMainMessage =
 	| ICadReadyMessage
 	| ICadErrorMessage
 	| ICadReviewRequestMessage
 	| ICadLayerStatsMessage
 	| ICadMissingDataMessage
-	| ICadDebugMessage;
+	| ICadDebugMessage
+	| ICadSendSelectionMessage
+	| ICadEditsAppliedMessage;

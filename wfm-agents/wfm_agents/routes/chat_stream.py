@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from ..agent.config import AgentConfigError
 from ..agent_v2.runner import run_chat_stream
 from ..workspace import WorkspaceViolation, resolve_workspace_root
-from .chat import ChatRequest, _build_prompt, _resolve_attachments
+from .chat import ChatRequest, _build_claude_prompt, _build_prompt, _resolve_attachments
 
 _log = logging.getLogger(__name__)
 
@@ -24,6 +24,32 @@ async def chat_stream(request: Request, req: ChatRequest) -> StreamingResponse:
     except WorkspaceViolation as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # ── Claude Code backend ──
+    if req.backend == "claude_code":
+        from ..agent_v2.claude_runner import run_chat_stream_claude  # noqa: PLC0415
+
+        prompt = _build_claude_prompt(req, root)
+
+        async def sse_gen():
+            try:
+                async for frame in run_chat_stream_claude(
+                    prompt=prompt,
+                    workspace_root=str(root),
+                    cad_source_uri=req.cad_source_uri,
+                    session_id=req.session_id,
+                    model=req.model,
+                ):
+                    if await request.is_disconnected():
+                        break
+                    yield frame
+            except Exception as exc:
+                from ..agent_v2.sse import encode_sse  # noqa: PLC0415
+
+                yield encode_sse({"type": "error", "error": str(exc)})
+
+        return StreamingResponse(sse_gen(), media_type="text/event-stream")
+
+    # ── WFM backend (default) ──
     prompt = _build_prompt(req, root)
     attachments = _resolve_attachments(req, root)
 

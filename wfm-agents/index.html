@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WFM Agents — 项目概览</title>
+  <style>
+    :root { --bg: #f5f7fa; --card: #ffffff; --accent: #3b82f6; --text: #1e293b; --muted: #64748b; }
+    body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 2rem; }
+    h1 { color: var(--accent); margin-bottom: .5rem; }
+    h2 { border-bottom: 2px solid var(--accent); padding-bottom: .25rem; margin-top: 2rem; }
+    .card { background: var(--card); border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,.08); margin-bottom: 1rem; }
+    code { background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-size: .9em; }
+    pre { background: #1e293b; color: #e2e8f0; padding: 1rem; border-radius: 8px; overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: .5rem .75rem; border: 1px solid #e2e8f0; text-align: left; }
+    th { background: var(--accent); color: #fff; }
+    .tag { display: inline-block; background: #dbeafe; color: var(--accent); padding: 2px 8px; border-radius: 4px; font-size: .85em; }
+    .deprecated { color: var(--muted); font-size: .85em; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+
+  <h1>🤖 WFM Agents</h1>
+  <p>WFM Studio 的 Agent 后端服务 — <strong>FastAPI + OpenAI Agents SDK</strong></p>
+
+  <div class="card">
+    <h2>架构概览</h2>
+    <p>自 2026-05 起，对话后端基于 <strong>OpenAI Agents SDK</strong>（<code>wfm_agents/agent_v2/</code>），不再使用自研 runner。</p>
+    <pre>
+wfm_agents/
+├── agent/              # deprecated，仅保留模块声明
+├── agent_v2/           # ★ 当前运行时
+│   ├── agents.py       # Agent 定义：router + text_to_cad / cad_review / docx_review
+│   ├── context.py      # WfmAgentContext(workspace_root)
+│   ├── tools.py        # workspace + CAD + DOCX 工具
+│   ├── sse.py          # SSE 事件编码
+│   └── runner.py       # run_chat() / run_chat_stream() — 路由层唯一入口
+├── cad/                # DXF 解析 / 审图 schema
+├── gateway/            # [DEPRECATED] 旧 AgentGateway
+├── engines/            # [DEPRECATED] 旧 EngineAdapter
+├── routes/             # HTTP 薄路由
+└── server.py           # FastAPI 入口
+    </pre>
+  </div>
+
+  <div class="card">
+    <h2>环境变量</h2>
+    <table>
+      <thead><tr><th>变量</th><th>说明</th><th>默认值</th></tr></thead>
+      <tbody>
+        <tr><td><code>WFM_OPENAI_API_KEY</code> / <code>OPENAI_API_KEY</code></td><td>API Key（必填）</td><td>—</td></tr>
+        <tr><td><code>WFM_OPENAI_BASE_URL</code></td><td>上游 base URL</td><td>（空）</td></tr>
+        <tr><td><code>WFM_AGENT_MODEL</code></td><td>模型 ID</td><td><code>gpt-4o-mini</code></td></tr>
+        <tr><td><code>WFM_AGENT_TEMP</code></td><td>温度</td><td><code>0.3</code></td></tr>
+        <tr><td><code>WFM_AGENT_MAX_TOOL_ROUNDS</code></td><td>工具循环上限</td><td><code>16</code></td></tr>
+        <tr><td><code>WFM_AGENT_API</code></td><td>上游能力探测</td><td><code>chat</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>快速启动</h2>
+    <pre>
+cp .env.example .env          # 填入 WFM_OPENAI_API_KEY 等
+uv sync --extra dev
+uv run uvicorn wfm_agents.server:app --reload --host 127.0.0.1 --port 8765
+    </pre>
+    <p>也可使用 <code>./scripts/dev.sh</code>（含 DevUI）或 <code>./scripts/dev-minimal.sh</code>（最小闭环）。</p>
+  </div>
+
+  <div class="card">
+    <h2>API 接口</h2>
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>GET</td><td><code>/v1/health</code></td><td>健康检查</td></tr>
+        <tr><td>POST</td><td><code>/v1/chat</code></td><td>对话（agent_v2 runner）</td></tr>
+        <tr><td>POST</td><td><code>/v1/chat/stream</code></td><td>SSE 流式对话</td></tr>
+        <tr><td>POST</td><td><code>/v1/cad/review</code></td><td>CAD 审图（同步）</td></tr>
+        <tr><td>POST</td><td><code>/v1/cad/review/stream</code></td><td>CAD 审图（SSE 流式）</td></tr>
+        <tr><td>POST</td><td><code>/v1/workspace/write</code></td><td>工作区内写文件</td></tr>
+        <tr><td>POST</td><td><code>/v1/workspace/read</code></td><td>工作区内读文件</td></tr>
+        <tr><td>POST</td><td><code>/v1/admin/mcp/reload</code></td><td>重载 MCP 工具列表</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>验收</h2>
+    <ul>
+      <li>单元测试：<code>cd wfm-agents && uv run pytest -x -q</code>（75 passed）</li>
+      <li>架构文档：<a href="#">docs/ARCH_AGENT_SDK_NATIVE.md</a></li>
+      <li>迁移说明：<a href="#">docs/WHY_AGENTS_SDK.md</a></li>
+    </ul>
+  </div>
+
+  <footer style="text-align:center; color:var(--muted); margin-top:2rem;">
+    <span class="deprecated">engine / mode 请求字段已废弃（接受但忽略）</span>
+  </footer>
+
+</body>
+</html>

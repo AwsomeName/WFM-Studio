@@ -284,6 +284,46 @@
 
 /* ── Streaming message ─────────────────────────────────────── */
 
+/* Thinking block (Claude Code backend) */
+.wfm-chat-pane .wfm-msg-thinking {
+	font-size: 12px;
+	opacity: 0.6;
+	padding: 6px 8px;
+	margin-bottom: 4px;
+	white-space: pre-wrap;
+	word-break: break-word;
+	border-left: 2px solid var(--vscode-textBlockQuote-border, rgba(255,255,255,0.15));
+	max-height: 120px;
+	overflow-y: auto;
+}
+
+.wfm-chat-pane .wfm-msg-thinking.wfm-thinking-collapsed {
+	max-height: 32px;
+	overflow: hidden;
+	cursor: pointer;
+	position: relative;
+}
+
+.wfm-chat-pane .wfm-msg-thinking.wfm-thinking-collapsed::after {
+	content: '... 点击展开';
+	position: absolute;
+	bottom: 0;
+	right: 0;
+	background: var(--vscode-editorWidget-background);
+	padding: 0 4px;
+	font-size: 11px;
+}
+
+.wfm-chat-pane .wfm-msg-thinking.wfm-thinking-collapsed.expanded {
+	max-height: 400px;
+	overflow-y: auto;
+	cursor: pointer;
+}
+
+.wfm-chat-pane .wfm-msg-thinking.wfm-thinking-collapsed.expanded::after {
+	content: ' 点击收起';
+}
+
 .wfm-chat-pane .wfm-msg-streaming .wfm-msg-role::after {
 	content: '';
 	display: inline-block;

@@ -57,6 +57,7 @@ export interface IWfmExternalChatSubmission {
 
 export interface IWfmStreamCallbacks {
 	onSession?(sessionId: string | null): void;
+	onThinkingDelta?(delta: string): void;
 	onTextDelta(delta: string): void;
 	onToolCallStarted(id: string, name: string): void;
 	onToolCallDone(id: string): void;
@@ -74,6 +75,12 @@ export interface IWfmAgentClientService {
 	 */
 	readonly baseUrl: string;
 
+	/** Whether the backend has responded to a health check. */
+	readonly backendReady: boolean;
+
+	/** Fires once when the backend first responds to a health check. */
+	readonly onBackendReady: Event<boolean>;
+
 	/**
 	 * Send a chat message. The current workspace root (first folder of the
 	 * active workspace) is auto-injected; callers never pass it explicitly.
@@ -89,6 +96,7 @@ export interface IWfmAgentClientService {
 		extras?: IWfmChatExtras,
 		token?: CancellationToken,
 		sessionId?: string,
+		backend?: string,
 	): Promise<IWfmAgentChatReply>;
 
 	/**
@@ -103,6 +111,7 @@ export interface IWfmAgentClientService {
 		sessionId: string | undefined,
 		callbacks: IWfmStreamCallbacks,
 		model?: string,
+		backend?: string,
 	): Promise<void>;
 
 	/**

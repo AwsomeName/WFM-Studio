@@ -111,6 +111,10 @@ class ChatRequest(BaseModel):
         default=None,
         description="Optional: model override for this request (e.g. 'gpt-4.1', 'o3').",
     )
+    backend: str | None = Field(
+        default=None,
+        description="Optional: backend to use ('wfm' or 'claude_code'). Default: 'wfm'.",
+    )
 
 
 class ChatReply(BaseModel):
@@ -146,7 +150,32 @@ async def chat(req: ChatRequest) -> ChatReply:
     except WorkspaceViolation as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # Structural detection — inject context into prompt
+    # ── Claude Code backend ──
+    if req.backend == "claude_code":
+        from ..agent_v2.claude_runner import run_chat_claude  # noqa: PLC0415
+
+        prompt = _build_claude_prompt(req, root)
+        try:
+            content = await run_chat_claude(
+                prompt=prompt,
+                workspace_root=str(root),
+                cad_source_uri=req.cad_source_uri,
+                session_id=req.session_id,
+                model=req.model,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        from datetime import datetime, timezone  # noqa: PLC0415
+
+        return ChatReply(
+            content=content,
+            workspace_root=str(root),
+            received_at=datetime.now(timezone.utc).isoformat(),
+            session_id=req.session_id,
+        )
+
+    # ── WFM backend (default) ──
     prompt = _build_prompt(req, root)
 
     if req.engine:
@@ -187,6 +216,26 @@ def select_chat_mode(req: ChatRequest) -> ChatMode:
     if env_mode in {"single", "multi", "echo"}:
         return env_mode
     return "echo"
+
+
+def _build_claude_prompt(req: ChatRequest, root: Path) -> str:
+    """Lightweight prompt for Claude Code backend — no inline file content."""
+    parts: list[str] = []
+
+    cad_file_path = _resolve_cad_file_ref(req, root)
+    if cad_file_path:
+        parts.append(f"[CAD 文件: {cad_file_path}，请使用 cad_file_read 工具读取]")
+
+    for att in req.attachments:
+        rel = att.rel_path or _uri_to_workspace_relative(att.uri, root)
+        if rel:
+            parts.append(f"[附件: {rel}，请使用 workspace_read 工具读取]")
+
+    if req.dxf_text and req.dxf_text.strip():
+        parts.append("[用户在 CAD 视图中有选区数据]")
+
+    parts.append(req.message)
+    return "\n\n".join(parts)
 
 
 # --- Prompt assembly (route-layer context injection) ──────────────────

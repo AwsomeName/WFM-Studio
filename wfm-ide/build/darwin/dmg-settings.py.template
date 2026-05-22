@@ -7,8 +7,8 @@ badge_icon = {{BADGE_ICON}}
 background = {{BACKGROUND}}
 
 # Volume size
-size = '1g'
-shrink = False
+size = '6g'
+shrink = True
 
 # Files and symlinks
 files = [{{APP_PATH}}]

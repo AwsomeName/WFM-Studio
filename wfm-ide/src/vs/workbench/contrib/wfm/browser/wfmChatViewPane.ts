@@ -32,6 +32,7 @@ import {
 	IWfmChatExtras,
 	IWfmFileAttachment,
 } from '../common/wfmAgentClient.js';
+import { IPathService } from '../../../services/path/common/pathService.js';
 
 const $ = dom.$;
 
@@ -79,6 +80,12 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
 	cad_check_dim_accuracy: '检查标注精度',
 	docx_read: '读取文档',
 	text_to_cad: '生成 3D 模型',
+	Bash: '执行命令',
+	Read: '读取文件',
+	Write: '写入文件',
+	Edit: '编辑文件',
+	Glob: '搜索文件',
+	Grep: '搜索内容',
 };
 
 const AGENT_DISPLAY_NAMES: Record<string, string> = {
@@ -92,6 +99,8 @@ interface IStreamingMessageHandle {
 	readonly rootEl: HTMLElement;
 	readonly activityEl: HTMLElement;
 	readonly bodyEl: HTMLElement;
+	readonly thinkingEl: HTMLElement;
+	appendThinking(delta: string): void;
 	appendText(delta: string): void;
 	addHandoffStep(agent: string): void;
 	addToolStep(id: string, name: string): void;
@@ -118,6 +127,8 @@ export class WfmChatViewPane extends ViewPane {
 	private readonly tabBarDisposables = this._register(new DisposableStore());
 	private readonly attachments: IWfmFileAttachment[] = [];
 	private pendingCts: CancellationTokenSource | undefined;
+	private settingsPanelEl: HTMLElement | undefined;
+	private composerEl: HTMLElement | undefined;
 
 	private static readonly AGENT_LIST = [
 		{ id: 'wfm.router', label: 'WFM Router' },
@@ -127,20 +138,13 @@ export class WfmChatViewPane extends ViewPane {
 		{ id: 'openclaw', label: 'OpenClaw (即将推出)' },
 	];
 
-	// 模型列表对齐 wfm-agents/.env 里的实际配置：base_url 走阿里云 DashScope 兼容模式
-	// (https://dashscope.aliyuncs.com/compatible-mode/v1)，默认模型 glm-5.1。
-	// 当前 UI 选择尚未传递给后端 (见 docs/PLAN_AGENT_MODEL_SELECTOR.md §1)，
-	// 占位项仅用于展示阿里云上可切换的候选，不会改变实际跑的模型。
-	private static readonly MODEL_LIST = [
-		{ id: 'glm-5.1', label: 'GLM-5.1 (阿里云)' },
-		{ id: 'qwen-max', label: 'Qwen Max (即将推出)' },
-		{ id: 'qwen-plus', label: 'Qwen Plus (即将推出)' },
-		{ id: 'deepseek-v3', label: 'DeepSeek V3 (即将推出)' },
-		{ id: 'deepseek-r1', label: 'DeepSeek R1 (即将推出)' },
+	private static readonly BACKEND_LIST = [
+		{ id: 'wfm', label: 'WFM Studio' },
+		{ id: 'claude_code', label: 'Claude Code' },
 	];
 
 	private selectedAgent: string = WfmChatViewPane.AGENT_LIST[0].id;
-	private selectedModel: string = WfmChatViewPane.MODEL_LIST[0].id;
+	private selectedBackend: string = WfmChatViewPane.BACKEND_LIST[0].id;
 
 	private sessions: IWfmChatSession[] = [];
 	private activeSessionId: string = '';
@@ -162,6 +166,7 @@ export class WfmChatViewPane extends ViewPane {
 		@IStorageService private readonly storageService: IStorageService,
 		@IFileService private readonly fileService: IFileService,
 		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
+		@IPathService private readonly pathService: IPathService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 
@@ -204,29 +209,129 @@ export class WfmChatViewPane extends ViewPane {
 	}
 
 	private async openWfmSettings(): Promise<void> {
-		const folders = this.workspaceContextService.getWorkspace().folders;
-		if (folders.length === 0) {
+		// Toggle: close settings panel if already open
+		if (this.settingsPanelEl) {
+			this.settingsPanelEl.remove();
+			this.settingsPanelEl = undefined;
+			if (this.messagesEl) { this.messagesEl.style.display = ''; }
+			if (this.composerEl) { this.composerEl.style.display = ''; }
 			return;
 		}
-		const root = folders[0].uri;
-		const settingsDir = URI.joinPath(root, '.wfm');
-		const settingsUri = URI.joinPath(settingsDir, 'settings.json');
+
+		// Hide chat, show settings form
+		if (this.messagesEl) { this.messagesEl.style.display = 'none'; }
+		if (this.composerEl) { this.composerEl.style.display = 'none'; }
+
+		const panel = dom.append(this.rootEl!, $('.wfm-settings-panel'));
+
+		// Read existing config from ~/.wfm-studio/.env
+		let apiKey = '';
+		let baseUrl = 'https://open.bigmodel.cn/api/paas/v4';
+		let model = 'glm-5.1';
+		let agentApi = 'chat';
 
 		try {
-			const exists = await this.fileService.exists(settingsUri);
-			if (!exists) {
-				await this.fileService.createFolder(settingsDir);
-				const defaultSettings = JSON.stringify({
-					baseUrl: 'https://api.openai.com/v1',
-					apiKey: '',
-					model: 'gpt-4.1-mini',
-				}, null, 2) + '\n';
-				await this.fileService.writeFile(settingsUri, VSBuffer.fromString(defaultSettings));
+			const home = await this.pathService.userHome({ preferLocal: true });
+			const envUri = URI.joinPath(home, '.wfm-studio', '.env');
+			if (await this.fileService.exists(envUri)) {
+				const content = (await this.fileService.readFile(envUri)).value.toString();
+				for (const line of content.split('\n')) {
+					const m = line.match(/^([^#=]+)=(.*)$/);
+					if (!m) { continue; }
+					const key = m[1].trim();
+					const val = m[2].trim();
+					if (key === 'WFM_OPENAI_API_KEY') { apiKey = val; }
+					else if (key === 'WFM_OPENAI_BASE_URL') { baseUrl = val; }
+					else if (key === 'WFM_AGENT_MODEL') { model = val; }
+					else if (key === 'WFM_AGENT_API') { agentApi = val; }
+				}
 			}
-			await this.openerService.open(settingsUri, { fromUserGesture: true });
-		} catch (err) {
-			this.logService.warn(`[wfm] failed to open settings: ${err}`);
-		}
+		} catch { /* no existing config */ }
+
+		// Title
+		const title = dom.append(panel, $('.wfm-settings-title'));
+		title.textContent = localize('wfm.settings.title', 'WFM Studio 设置');
+
+		// API Key
+		const apiKeyGroup = dom.append(panel, $('.wfm-settings-group'));
+		const apiKeyLabel = dom.append(apiKeyGroup, $('label'));
+		apiKeyLabel.textContent = localize('wfm.settings.apiKey', 'API Key');
+		const apiKeyInput = dom.append(apiKeyGroup, $('input.wfm-settings-input')) as HTMLInputElement;
+		apiKeyInput.type = 'password';
+		apiKeyInput.value = apiKey;
+		apiKeyInput.placeholder = 'sk-...';
+
+		// Base URL
+		const baseUrlGroup = dom.append(panel, $('.wfm-settings-group'));
+		const baseUrlLabel = dom.append(baseUrlGroup, $('label'));
+		baseUrlLabel.textContent = localize('wfm.settings.baseUrl', 'API 端点 (Base URL)');
+		const baseUrlInput = dom.append(baseUrlGroup, $('input.wfm-settings-input')) as HTMLInputElement;
+		baseUrlInput.type = 'text';
+		baseUrlInput.value = baseUrl;
+
+		// Model
+		const modelGroup = dom.append(panel, $('.wfm-settings-group'));
+		const modelLabel = dom.append(modelGroup, $('label'));
+		modelLabel.textContent = localize('wfm.settings.model', '模型');
+		const modelInput = dom.append(modelGroup, $('input.wfm-settings-input')) as HTMLInputElement;
+		modelInput.type = 'text';
+		modelInput.value = model;
+
+		// API Mode
+		const apiModeGroup = dom.append(panel, $('.wfm-settings-group'));
+		const apiModeLabel = dom.append(apiModeGroup, $('label'));
+		apiModeLabel.textContent = localize('wfm.settings.apiMode', 'API 模式');
+		const apiModeSelect = dom.append(apiModeGroup, $('select.wfm-settings-select')) as HTMLSelectElement;
+		const chatOpt = dom.append(apiModeSelect, $('option')) as HTMLOptionElement;
+		chatOpt.value = 'chat'; chatOpt.textContent = 'Chat'; chatOpt.selected = agentApi === 'chat';
+		const respOpt = dom.append(apiModeSelect, $('option')) as HTMLOptionElement;
+		respOpt.value = 'responses'; respOpt.textContent = 'Responses'; respOpt.selected = agentApi === 'responses';
+
+		// Status
+		const statusEl = dom.append(panel, $('.wfm-settings-status'));
+
+		// Actions
+		const actions = dom.append(panel, $('.wfm-settings-actions'));
+		const saveBtn = dom.append(actions, $('button.wfm-settings-save')) as HTMLButtonElement;
+		saveBtn.textContent = localize('wfm.settings.save', '保存');
+		const cancelBtn = dom.append(actions, $('button.wfm-settings-cancel')) as HTMLButtonElement;
+		cancelBtn.textContent = localize('wfm.settings.cancel', '取消');
+
+		this._register(dom.addDisposableListener(saveBtn, 'click', async () => {
+			try {
+				const home = await this.pathService.userHome({ preferLocal: true });
+				const configDir = URI.joinPath(home, '.wfm-studio');
+				const envUri = URI.joinPath(configDir, '.env');
+				await this.fileService.createFolder(configDir);
+				const lines = [
+					`WFM_OPENAI_API_KEY=${apiKeyInput.value}`,
+					`WFM_OPENAI_BASE_URL=${baseUrlInput.value}`,
+					`WFM_AGENT_MODEL=${modelInput.value}`,
+					`WFM_AGENT_API=${apiModeSelect.value}`,
+					`WFM_AGENT_RETRIES=2`,
+					`WFM_AGENT_TIMEOUT=120`,
+					`WFM_AGENT_TEMP=0.3`,
+					`WFM_AGENT_MAX_TOOL_ROUNDS=80`,
+					`WFM_AGENT_SESSION_TTL_SEC=3600`,
+					`WFM_AGENT_ALLOW_IMAGE=false`,
+				];
+				await this.fileService.writeFile(envUri, VSBuffer.fromString(lines.join('\n') + '\n'));
+				statusEl.textContent = localize('wfm.settings.saved', '配置已保存。重启 WFM Studio 后生效。');
+				statusEl.classList.add('success');
+			} catch (err) {
+				statusEl.textContent = String(err);
+				statusEl.classList.add('error');
+			}
+		}));
+
+		this._register(dom.addDisposableListener(cancelBtn, 'click', () => {
+			this.settingsPanelEl?.remove();
+			this.settingsPanelEl = undefined;
+			if (this.messagesEl) { this.messagesEl.style.display = ''; }
+			if (this.composerEl) { this.composerEl.style.display = ''; }
+		}));
+
+		this.settingsPanelEl = panel;
 	}
 
 	protected override renderBody(container: HTMLElement): void {
@@ -273,6 +378,7 @@ export class WfmChatViewPane extends ViewPane {
 		this.messagesEl = dom.append(this.rootEl, $('.wfm-chat-messages'));
 
 		const composer = dom.append(this.rootEl, $('.wfm-chat-composer'));
+		this.composerEl = composer;
 
 		this.attachmentsEl = dom.append(composer, $('.wfm-chat-attachments'));
 		this.attachmentsEl.style.display = 'none';
@@ -301,13 +407,13 @@ export class WfmChatViewPane extends ViewPane {
 		}));
 
 		this.modelSelector = dom.append(toolbarLeft, $('button.wfm-chat-selector.wfm-chat-model-selector')) as HTMLButtonElement;
-		dom.append(this.modelSelector, $('span.selector-icon')).textContent = '⚙';
+		dom.append(this.modelSelector, $('span.selector-icon')).textContent = '◆';
 		dom.append(this.modelSelector, $('span.selector-label'));
 		dom.append(this.modelSelector, $('span.selector-chevron')).textContent = '▾';
-		this.updateModelLabel();
+		this.updateBackendLabel();
 		this._register(dom.addDisposableListener(this.modelSelector, 'click', (e) => {
 			e.stopPropagation();
-			this.showModelPicker(this.modelSelector!);
+			this.showBackendPicker(this.modelSelector!);
 		}));
 
 		// Right side: Mic + Send
@@ -687,6 +793,10 @@ export class WfmChatViewPane extends ViewPane {
 							this.persistSessions();
 						}
 					},
+					onThinkingDelta: (delta) => {
+						handle.appendThinking(delta);
+						handle.scrollToBottom();
+					},
 					onTextDelta: (delta) => {
 						handle.appendText(delta);
 						handle.scrollToBottom();
@@ -722,10 +832,11 @@ export class WfmChatViewPane extends ViewPane {
 						this.logService.warn(`[wfm] chat stream error: ${error}`);
 					},
 				},
-				this.selectedModel,
+				this.selectedBackend === 'claude_code' ? undefined : this.selectedModel,
+				this.selectedBackend === 'claude_code' ? 'claude_code' : undefined,
 			);
 
-			if (!streamedDone) {
+			if (!streamedDone && this.selectedBackend !== 'claude_code') {
 				handle.rootEl.remove();
 				this.logService.info('[wfm] stream ended without done event, falling back to sync');
 				const reply = await this.agentClient.chat(
@@ -733,6 +844,7 @@ export class WfmChatViewPane extends ViewPane {
 					extras,
 					cts.token,
 					session.backendSessionId,
+					this.selectedBackend === 'claude_code' ? 'claude_code' : undefined,
 				);
 				if (reply.sessionId && !session.backendSessionId) {
 					session.backendSessionId = reply.sessionId;
@@ -785,11 +897,11 @@ export class WfmChatViewPane extends ViewPane {
 		if (label) { label.textContent = item?.label ?? this.selectedAgent; }
 	}
 
-	private updateModelLabel(): void {
+	private updateBackendLabel(): void {
 		if (!this.modelSelector) { return; }
 		const label = this.modelSelector.querySelector('.selector-label');
-		const item = WfmChatViewPane.MODEL_LIST.find(m => m.id === this.selectedModel);
-		if (label) { label.textContent = item?.label ?? this.selectedModel; }
+		const item = WfmChatViewPane.BACKEND_LIST.find(b => b.id === this.selectedBackend);
+		if (label) { label.textContent = item?.label ?? this.selectedBackend; }
 	}
 
 	private showAgentPicker(anchor: HTMLElement): void {
@@ -799,10 +911,10 @@ export class WfmChatViewPane extends ViewPane {
 		});
 	}
 
-	private showModelPicker(anchor: HTMLElement): void {
-		this.showSelectorPicker(anchor, WfmChatViewPane.MODEL_LIST, this.selectedModel, (id) => {
-			this.selectedModel = id;
-			this.updateModelLabel();
+	private showBackendPicker(anchor: HTMLElement): void {
+		this.showSelectorPicker(anchor, WfmChatViewPane.BACKEND_LIST, this.selectedBackend, (id) => {
+			this.selectedBackend = id;
+			this.updateBackendLabel();
 		});
 	}
 
@@ -839,6 +951,8 @@ export class WfmChatViewPane extends ViewPane {
 		const roleEl = dom.append(msgEl, $('.wfm-msg-role'));
 		roleEl.textContent = this.roleLabel('assistant');
 		const activityEl = dom.append(msgEl, $('.wfm-msg-activity'));
+		const thinkingEl = dom.append(msgEl, $('div.wfm-msg-thinking'));
+		thinkingEl.style.display = 'none';
 		const bodyEl = dom.append(msgEl, $('div.wfm-msg-body'));
 
 		this.scrollToBottom();
@@ -850,8 +964,16 @@ export class WfmChatViewPane extends ViewPane {
 			rootEl: msgEl,
 			activityEl,
 			bodyEl,
+			thinkingEl,
+
+			appendThinking(delta: string): void {
+				thinkingEl.style.display = '';
+				thinkingEl.textContent = (thinkingEl.textContent ?? '') + delta;
+			},
 
 			appendText(delta: string): void {
+				// Hide thinking block when real text arrives
+				thinkingEl.style.display = 'none';
 				bodyEl.textContent = (bodyEl.textContent ?? '') + delta;
 			},
 
@@ -894,6 +1016,13 @@ export class WfmChatViewPane extends ViewPane {
 				msgEl.classList.remove('wfm-msg-streaming');
 				if (text) {
 					bodyEl.textContent = text;
+				}
+				// Collapse thinking block
+				if (thinkingEl.textContent) {
+					thinkingEl.classList.add('wfm-thinking-collapsed');
+					thinkingEl.onclick = () => thinkingEl.classList.toggle('expanded');
+				} else {
+					thinkingEl.remove();
 				}
 				const steps = activityEl.children;
 				const count = steps.length;
