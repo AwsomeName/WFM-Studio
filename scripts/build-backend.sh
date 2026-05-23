@@ -29,30 +29,23 @@ PYTHON_RELEASE="20260510"
 PYTHON_ARCH="aarch64-apple-darwin"
 PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_RELEASE}/cpython-${PYTHON_VERSION}%2B${PYTHON_RELEASE}-${PYTHON_ARCH}-install_only.tar.gz"
 
-# 最小依赖集（不含 CAD/crewai/build123d/trimesh/playwright）
-MINIMAL_DEPS=(
-  "fastapi>=0.115"
-  "uvicorn[standard]>=0.32"
-  "pydantic>=2.9"
-  "python-dotenv>=1.0"
-  "openai>=1.59"
+# 核心依赖（与 pyproject.toml 保持一致）
+CORE_DEPS=(
   "mcp>=1.26.0"
-  "pyyaml>=6.0.3"
-  "httpx>=0.27"
+  "ezdxf>=1.3"
+  "python-docx>=1.1"
+  "shapely>=2.0"
 )
 
 # CAD 依赖集（--with-cad 时追加）
 CAD_DEPS=(
   "build123d>=0.10"
-  "ezdxf"
-  "numpy"
-  "pillow"
-  "playwright"
   "trimesh>=4.12"
+  "pillow"
 )
 
 # 合并依赖列表
-ALL_DEPS=("${MINIMAL_DEPS[@]}")
+ALL_DEPS=("${CORE_DEPS[@]}")
 if [[ $WITH_CAD -eq 1 ]]; then
   ALL_DEPS+=("${CAD_DEPS[@]}")
 fi
@@ -145,39 +138,13 @@ find "$AGENTS_DST" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || tr
 
 ok "wfm-agents 源码已复制"
 
-# ─── Step 4: 复制 openai-agents SDK ───
-log "复制 openai-agents SDK..."
-AGENTS_SDK_SRC="$ROOT_DIR/third_party/agents/openai-agents-python/src/agents"
-AGENTS_SDK_DST="$SITE_PACKAGES/agents"
-
-if [[ ! -d "$AGENTS_SDK_SRC" ]]; then
-  echo "错误：未找到 openai-agents SDK: $AGENTS_SDK_SRC" >&2
-  exit 1
-fi
-
-rm -rf "$AGENTS_SDK_DST"
-cp -R "$AGENTS_SDK_SRC" "$AGENTS_SDK_DST"
-find "$AGENTS_SDK_DST" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-
-ok "openai-agents SDK 已复制"
-
-# ─── Step 5: 生成 start.sh ───
+# ─── Step 4: 生成 start.sh（独立测试 MCP server 用） ───
 log "生成 start.sh..."
 cat > "$BUILD_DIR/start.sh" << 'STARTEOF'
 #!/bin/bash
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 加载用户配置
-ENV_FILE="$HOME/.wfm-studio/.env"
-if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  . "$ENV_FILE"
-  set +a
-fi
-
-# 设置 PYTHONPATH：site-packages + wfm_agents 父目录
 export PYTHONPATH="$DIR/site-packages:$DIR"
 
 # CAD 工具链（可选，仅打包版包含）
@@ -188,16 +155,15 @@ if [[ -d "$DIR/skills/cad" ]]; then
   export PATH="$DIR/libredwg:$PATH"
 fi
 
-exec "$DIR/python/bin/python3" -m uvicorn wfm_agents.server:app \
-  --host 127.0.0.1 --port 8765 --log-level warning
+exec "$DIR/python/bin/python3" -m wfm_agents.agent_v2.wfm_mcp_server
 STARTEOF
 chmod +x "$BUILD_DIR/start.sh"
 
 ok "start.sh 已生成"
 
-# ─── Step 6-9: CAD 工具链（仅 --with-cad） ───
+# ─── Step 5-8: CAD 工具链（仅 --with-cad） ───
 if [[ $WITH_CAD -eq 1 ]]; then
-  # Step 6: 复制 CAD 脚本
+  # Step 5: 复制 CAD 脚本
   log "复制 CAD 脚本..."
   CAD_SKILLS_SRC="$ROOT_DIR/third_party/text-to-cad/skills/cad"
   CAD_SKILLS_DST="$BUILD_DIR/skills/cad"
@@ -211,7 +177,7 @@ if [[ $WITH_CAD -eq 1 ]]; then
     ok "CAD 脚本已复制"
   fi
 
-  # Step 7: 复制 libredwg
+  # Step 6: 复制 libredwg
   log "复制 libredwg..."
   LIBREDWG_SRC="$ROOT_DIR/third_party/libredwg/bin/macos/dwg2dxf"
   LIBREDWG_DST="$BUILD_DIR/libredwg/dwg2dxf"
@@ -224,7 +190,7 @@ if [[ $WITH_CAD -eq 1 ]]; then
     log "libredwg 未找到，跳过 DWG 支持"
   fi
 
-  # Step 8: 安装 Playwright Chromium
+  # Step 7: 安装 Playwright Chromium
   log "安装 Playwright Chromium..."
   BROWSERS_DIR="$BUILD_DIR/browsers"
   PYTHONPATH="$SITE_PACKAGES" PLAYWRIGHT_BROWSERS_PATH="$BROWSERS_DIR" \
@@ -240,8 +206,8 @@ ok "后端打包完成: $BUILD_DIR ($FINAL_SIZE)"
 log "  Python: $($PYTHON_BIN --version 2>&1)"
 if [[ $WITH_CAD -eq 1 ]]; then
   log "  依赖:   ${#ALL_DEPS[@]} 个包（含 CAD）"
-  log "  源码:   wfm_agents/ + agents SDK + CAD skills"
+  log "  源码:   wfm_agents/ + CAD skills"
 else
-  log "  依赖:   ${#MINIMAL_DEPS[@]} 个包"
-  log "  源码:   wfm_agents/ + agents SDK"
+  log "  依赖:   ${#CORE_DEPS[@]} 个包"
+  log "  源码:   wfm_agents/"
 fi
