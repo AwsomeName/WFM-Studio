@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-#: chat 路由会把 ``recipe_id`` 设成这个值，作为审图分支的标识。
+#: cad_review 路由使用此值作为审图分支的标识。
 RECIPE_ID = "wfm.cad_review"
 
 _OUTPUT_FORMAT_SPEC = """请按如下结构输出审图意见：

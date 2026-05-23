@@ -141,8 +141,10 @@ import { ChatPasteProvidersFeature } from './widget/input/editor/chatPasteProvid
 import { QuickChatService } from './widgetHosts/chatQuick.js';
 import { ChatResponseAccessibleView } from './accessibility/chatResponseAccessibleView.js';
 import { ChatTerminalOutputAccessibleView } from './accessibility/chatTerminalOutputAccessibleView.js';
-import { ChatSetupContribution, ChatTeardownContribution } from './chatSetup/chatSetupContributions.js';
-import { ChatStatusBarEntry } from './chatStatus/chatStatusEntry.js';
+// WFM Studio: 不导入 ChatSetup / ChatTeardown —— 这两个是 Microsoft Copilot 的登录/订阅/账户菜单流程
+// import { ChatSetupContribution, ChatTeardownContribution } from './chatSetup/chatSetupContributions.js';
+// WFM Studio: 不导入 ChatStatusBarEntry —— 状态栏 "Sign In" 入口
+// import { ChatStatusBarEntry } from './chatStatus/chatStatusEntry.js';
 import { ChatVariablesService } from './attachments/chatVariables.js';
 import { ChatWidget } from './widget/chatWidget.js';
 import { ChatCodeBlockContextProviderService } from './codeBlockContextProviderService.js';
@@ -2070,9 +2072,16 @@ registerWorkbenchContribution2(CodeBlockActionRendering.ID, CodeBlockActionRende
 registerWorkbenchContribution2(ChatImplicitContextContribution.ID, ChatImplicitContextContribution, WorkbenchPhase.Eventually);
 registerWorkbenchContribution2(ChatViewsWelcomeHandler.ID, ChatViewsWelcomeHandler, WorkbenchPhase.BlockStartup);
 registerWorkbenchContribution2(ChatGettingStartedContribution.ID, ChatGettingStartedContribution, WorkbenchPhase.Eventually);
-registerWorkbenchContribution2(ChatSetupContribution.ID, ChatSetupContribution, WorkbenchPhase.BlockRestore);
-registerWorkbenchContribution2(ChatTeardownContribution.ID, ChatTeardownContribution, WorkbenchPhase.AfterRestored);
-registerWorkbenchContribution2(ChatStatusBarEntry.ID, ChatStatusBarEntry, WorkbenchPhase.BlockRestore);
+// WFM Studio: 不注册 ChatSetup / ChatTeardown / ChatStatusBarEntry
+// 这三组贡献集中负责 Microsoft Copilot 的登录、订阅、账户菜单与状态栏 "Sign In" 按钮：
+//   - ChatSetupContribution: signInTitleBarEntry / triggerSetup / triggerSetupForceSignIn /
+//     triggerSetupFromAccounts / SignInTitleBarAction / UpgradePlanAction / EnableOveragesAction
+//   - ChatTeardownContribution: chat.disableAIFeatures 联动（开关 Copilot 扩展启用状态）
+//   - ChatStatusBarEntry: status bar 的 "Sign In" / "Manage Copilot" 项
+// WFM 用本地 Claude CLI，不需要这些云端账户体系
+// registerWorkbenchContribution2(ChatSetupContribution.ID, ChatSetupContribution, WorkbenchPhase.BlockRestore);
+// registerWorkbenchContribution2(ChatTeardownContribution.ID, ChatTeardownContribution, WorkbenchPhase.AfterRestored);
+// registerWorkbenchContribution2(ChatStatusBarEntry.ID, ChatStatusBarEntry, WorkbenchPhase.BlockRestore);
 registerWorkbenchContribution2(BuiltinToolsContribution.ID, BuiltinToolsContribution, WorkbenchPhase.Eventually);
 registerWorkbenchContribution2(UsagesToolContribution.ID, UsagesToolContribution, WorkbenchPhase.BlockRestore);
 registerWorkbenchContribution2(RenameToolContribution.ID, RenameToolContribution, WorkbenchPhase.BlockRestore);

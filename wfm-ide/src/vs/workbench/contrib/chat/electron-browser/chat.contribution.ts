@@ -45,7 +45,8 @@ import { IPluginGitService } from '../common/plugins/pluginGitService.js';
 import { registerChatDeveloperActions } from './actions/chatDeveloperActions.js';
 import { registerChatExportZipAction } from './actions/chatExportZip.js';
 import { HoldToVoiceChatInChatViewAction, InlineVoiceChatAction, KeywordActivationContribution, QuickVoiceChatAction, ReadChatResponseAloud, StartVoiceChatAction, StopListeningAction, StopListeningAndSubmitAction, StopReadAloud, StopReadChatItemAloud, VoiceChatInChatViewAction } from './actions/voiceChatActions.js';
-import { OpenAgentsWindowAction } from './agentSessions/agentSessionsActions.js';
+// WFM Studio: 不导入 OpenAgentsWindowAction —— 我们不开放 Microsoft Agents 子窗口入口
+// import { OpenAgentsWindowAction } from './agentSessions/agentSessionsActions.js';
 import { NativeBuiltinToolsContribution } from './builtInTools/tools.js';
 import { NativePluginGitCommandService } from './pluginGitCommandService.js';
 
@@ -227,7 +228,10 @@ class ChatLifecycleHandler extends Disposable {
 	}
 }
 
-registerAction2(OpenAgentsWindowAction);
+// WFM Studio: 不注册 workbench.action.openAgentsWindow。
+// 这个 action 是 Microsoft Copilot Agents 子窗口入口（含 GitHub/Google/Apple 登录），
+// 我们用本地 Claude CLI，不需要它。也顺带让 agents banner（依赖此 command 是否存在）自动隐藏。
+// registerAction2(OpenAgentsWindowAction);
 registerAction2(StartVoiceChatAction);
 
 registerAction2(VoiceChatInChatViewAction);

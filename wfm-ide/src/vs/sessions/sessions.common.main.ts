@@ -456,7 +456,9 @@ import '../workbench/contrib/opener/browser/opener.contribution.js';
 import './browser/paneCompositePartService.js';
 import './browser/layoutActions.js';
 
-import './contrib/accountMenu/browser/account.contribution.js';
+// WFM Studio: 注释掉 Sessions 窗口的账户/登录侧栏（依赖 IDefaultAccountService + GitHub/Google/Apple 登录）。
+// 我们不需要 Microsoft 云账户体系。
+// import './contrib/accountMenu/browser/account.contribution.js';
 import './contrib/aiCustomizationTreeView/browser/aiCustomizationTreeView.contribution.js';
 import './contrib/chat/browser/chat.contribution.js';
 import './contrib/chat/browser/agentHostSessionConfigPicker.js';
@@ -478,7 +480,9 @@ import './contrib/terminal/browser/sessionsTerminalContribution.js';
 import './contrib/logs/browser/logs.contribution.js';
 import './contrib/chatDebug/browser/chatDebug.contribution.js';
 import './contrib/workspace/browser/workspace.contribution.js';
-import './contrib/welcome/browser/welcome.contribution.js';
+// WFM Studio: 注释掉 Microsoft "Welcome to Agents" sign-in 引导（GitHub / Google / Apple / GHE）。
+// 我们用本地 Claude CLI 作为对话后端，不需要这套云端登录流程。
+// import './contrib/welcome/browser/welcome.contribution.js';
 import './contrib/policyBlocked/browser/policyBlocked.contribution.js';
 
 import './services/sessions/browser/sessionsManagementService.js';

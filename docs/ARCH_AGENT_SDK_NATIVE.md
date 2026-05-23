@@ -1,7 +1,18 @@
 # ARCH_AGENT_SDK_NATIVE — 对话后端（OpenAI Agents SDK 原生方案）
 
+> ⚠️ **状态：已废弃（DEPRECATED, 2026-05-22）**
+>
+> 对话后端已从 OpenAI Agents SDK 迁移至 **Claude Code CLI + MCP 工具服务器**架构。本文描述的 Router Agent + Handoff + `@function_tool` 模式已不再使用。当前架构文档请参考 [`wfm-agents/README.md`](../wfm-agents/README.md)。
+>
+> **当前架构要点**：
+> - `agent_v2/claude_runner.py`：通过子进程调用 `claude -p <prompt> --output-format stream-json --verbose`
+> - `agent_v2/wfm_mcp_server.py`：MCP 工具服务器，所有 workspace/CAD/DOCX 工具注册为 `@mcp.tool()`
+> - 不再有 `router_agent` / `handoffs` / `Agent()` 定义——Claude Code CLI 自主决定调用哪些工具
+> - 不再有 `WfmAgentContext` / `RunContextWrapper`——workspace_root 通过 `WFM_WORKSPACE_ROOT` 环境变量注入 MCP 服务器
+> - 配置从 `WFM_OPENAI_API_KEY` + `WFM_AGENT_MODEL` 简化为单个 `WFM_CLAUDE_MODEL`（默认 `sonnet`）
+> - SSE 事件契约基本兼容（保留 `session` / `text_delta` / `tool_call_started` / `tool_call_done` / `error` / `done`），新增 `thinking_delta` / `cad_edit`
+
 > **版本**：v2.0（2026-05-19，Router Agent + Handoff 架构；新增 text_to_cad_agent）
-> **状态**：**正式规格**，取代 `ARCH_AGENT_GATEWAY.md` / `DEV_AGENT_GATEWAY.md` 描述的 EngineAdapter + AgentGateway 抽象作为对话主链路。
 > **关联**：
 > - `ARCH_AGENT_GATEWAY.md`（**已废弃**，保留为历史背景）
 > - `DEV_AGENT_GATEWAY.md`（**已废弃**，保留为历史背景）

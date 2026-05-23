@@ -1,1 +1,1 @@
-"""Agent v2 — OpenAI Agents SDK PoC (coexists with legacy agent/ runner)."""
+"""Agent v2 — Claude Code CLI backend with MCP tool server."""

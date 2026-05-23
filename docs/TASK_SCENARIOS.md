@@ -23,7 +23,7 @@
 
 响应除正文外还包含 `session_id` 和 `trace_id`（便于日志与评测）。
 
-> **2026-05 agent_v2 v2.0 迁移**：对话后端已切到 Router Agent + Handoff 架构。所有请求统一发给 `router_agent`，由 LLM 根据意图决定 handoff 到专用 Agent（text_to_cad / cad_review / docx_review）。`engine`、`mode`、`recipe` 字段不再影响路由选择。详见 [`docs/ARCH_AGENT_SDK_NATIVE.md`](ARCH_AGENT_SDK_NATIVE.md)。
+> **2026-05-22 Claude Code CLI 迁移**：对话后端已切到 **Claude Code CLI + MCP 工具服务器**架构。`claude_runner.py` 通过子进程调用 `claude` CLI，所有 workspace/CAD/DOCX 工具通过 MCP 协议暴露。不再有 `router_agent` / `handoffs`——Claude 自主决定调用哪些工具。`engine`、`mode`、`recipe` 字段不再影响路由选择。详见 [`wfm-agents/README.md`](../wfm-agents/README.md)。
 
 ---
 
@@ -47,17 +47,17 @@
 
 ---
 
-## 用户故事 2：用 OpenAI 兼容引擎完成「改一个文件」类任务（2026-05 默认链路）
+## 用户故事 2：用 Claude Code CLI 完成「改一个文件」类任务（2026-05 默认链路）
 
 **作为**开发者，**我要**用自然语言描述对当前仓库的小改动并让 Agent 执行，**以便**减少手写重复编辑。
 
 | 环节 | 行为 |
 |------|------|
-| 前置 | `wfm-agents/.env` 配好 `WFM_OPENAI_API_KEY`、`WFM_OPENAI_BASE_URL`、`WFM_OPENAI_MODEL`（推荐 DashScope + `glm-5.1`）；后端默认引擎已是 `openai` |
+| 前置 | `wfm-agents` 后端已启动，Claude Code CLI 已安装并认证；无需额外配置 API Key |
 | 操作 | 发送明确任务（例如「在 README 末尾加一行今日日期」） |
 | 期望 | 返回可读的执行摘要或变更说明；工具若启用，应在工作区内产生真实变更（依工具策略） |
 
-**API**：`POST /v1/chat/stream`（SSE 流式），body 默认不需要传 `engine`（默认即 `openai`）。模型与 base_url 由后端 env 决定，前端无感知。IDE 实时展示 Agent 执行步骤和流式文本。
+**API**：`POST /v1/chat/stream`（SSE 流式），body 默认不需要传 `engine` 或 `model`。Claude 模型由 `WFM_CLAUDE_MODEL` 环境变量控制（默认 `sonnet`），前端无感知。IDE 实时展示 Agent 执行步骤和流式文本。
 
 **前端 SSE 已打通**：
 - 工具调用步骤实时显示（读取文件、写入文件等），带 loading → ✓ 状态切换
@@ -109,7 +109,7 @@
 
 **API**：
 - 审图：复用 `POST /v1/chat`，支持 `dxf_text`、`cad_source_uri`、消息中 `.dxf`/`.dwg` 路径三种入口
-- route 层不再解析文件，只做路径标准化（`_resolve_cad_file_ref`），交给 `cad_review_agent` 的 8 个 `@function_tool` 自主完成审图
+- route 层做路径标准化，Claude 通过 MCP 工具（`cad_file_read`、`cad_extract_*`、`cad_check_*` 等）自主完成审图
 - 详见 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) §6
 
 **前端**：
@@ -120,9 +120,10 @@
 - ✅ DXF / DWG 真渲染（cad-viewer + libredwg-web + Three.js + WebGL）
 - ✅ viewer ↔ 审图触发联动（工具栏按钮）
 
-**工具化审图已设计（待实现）**：
-- `cad_review_agent` 拥有 8 个 `@function_tool`（总览 / 文字提取 / 标注提取 / 块提取 / 图层深挖 / 命名规范 / 标题块 / 标注精度），详见 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) §3
-- route 层简化为路径解析 + agent 选择，详见同文档 §6
+**工具化审图已实现（MCP 工具）**：
+- Claude 通过 MCP 工具自主审图：`cad_file_read`（总览）、`cad_extract_texts` / `cad_extract_dims` / `cad_extract_blocks` / `cad_layer_inspect`（深挖）、`cad_check_naming` / `cad_check_titleblock` / `cad_check_dim_accuracy`（专项检查）
+- 工具注册在 `wfm_mcp_server.py`，通过 `@mcp.tool()` 装饰器定义
+- 详见 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) §3
 - 后端 DWG→DXF fallback 转换，详见同文档 §4
 
 **仍是缺口（Phase 3）**：
@@ -144,29 +145,26 @@
 |------|------|
 | 前置 | 后端已起；`build123d` + `playwright` + `trimesh` 依赖已安装；third_party/text-to-cad Three.js 已就位 |
 | 操作 | 在「任务对话」输入：「生成一个 M10 六角螺栓」 |
-| 期望 | router_agent 识别意图 → handoff 到 text_to_cad_agent → 生成 build123d 源码 → 编译 STEP → 渲染 PNG → 返回文件路径 |
+| 期望 | Claude 识别意图 → 调用 MCP 工具生成 build123d 源码 → 编译 STEP → 渲染 PNG → 返回文件路径 |
 
-**完整流程**（4 个 API 往返，`max_turns=15`）：
+**完整流程**（Claude 通过 MCP 工具自主完成）：
 
 ```
 用户: "生成一个半径5mm的球体"
-  → router_agent: 识别为 CAD 建模意图
-  → handoff → text_to_cad_agent
+  → Claude: 识别为 CAD 建模意图
   → workspace_write: cad_generated/sphere_r5.py (build123d 源码)
   → cad_generate_step: scripts/step → sphere_r5.step + .sphere_r5.step.glb
   → cad_render: scripts/render view → sphere_r5.png (Playwright + Three.js WebGL)
   → 返回: 源文件路径 + STEP 路径 + 预览图路径
 ```
 
-**API**：`POST /v1/chat` 或 `POST /v1/chat/stream`，仅需 `workspace_root` + `message`。无需传 `recipe` 或 `engine`——Router Agent 自动识别。
+**API**：`POST /v1/chat` 或 `POST /v1/chat/stream`，仅需 `workspace_root` + `message`。无需传 `recipe` 或 `engine`——Claude 自动识别意图并调用对应 MCP 工具。
 
 **SSE 事件流**（流式接口，IDE 实时渲染）：
 
 ```
 session → session_id
-agent_handoff → wfm.router
-tool_call_started → transfer_to_text_to_cad
-agent_handoff → text_to_cad              → IDE 显示 "调用 Agent: 3D 模型生成"
+thinking_delta → "..."                     → Claude 思考过程（可选展示）
 text_delta → "我来为您生成..."            → IDE 流式显示文本
 tool_call_started → workspace_write       → IDE 显示 "⟳ 写入文件..."
 tool_call_done                           → IDE 显示 "✓ 写入文件 ✓"
@@ -175,17 +173,17 @@ tool_call_done                           → IDE 显示 "✓ 生成 STEP 模型 
 tool_call_started → cad_render            → IDE 显示 "⟳ 渲染预览..."
 tool_call_done                           → IDE 显示 "✓ 渲染预览 ✓"
 text_delta → 结果汇总
-done → 最终文本，活动日志折叠
+done → 最终文本
 ```
 
 **依赖**：
 
 | 依赖 | 大小 | 安装方式 |
 |------|------|----------|
-| build123d（含 OCP） | ~100MB | `uv add build123d` |
-| Playwright + Chromium | ~170MB | `uv add playwright && python -m playwright install chromium` |
+| build123d（含 OCP） | ~100MB | `uv sync`（已在 pyproject.toml） |
+| Playwright + Chromium | ~170MB | `python -m playwright install chromium` |
 | Three.js | ~5MB | `cd third_party/text-to-cad/skills/cad/explorer && npm install three` |
-| trimesh | ~5MB | `uv add trimesh` |
+| trimesh | ~5MB | `uv sync`（已在 pyproject.toml） |
 
 **渲染管线**：详见 [ARCH_RENDER_PIPELINE.md](ARCH_RENDER_PIPELINE.md)。
 

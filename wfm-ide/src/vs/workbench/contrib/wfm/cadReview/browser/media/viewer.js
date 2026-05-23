@@ -60,6 +60,15 @@
 	/** 当前的 view mode：'select' / 'pan'。注意这是 UI 状态，cad-simple-viewer
 	 *  内部用 `AcEdViewMode.SELECTION` / `AcEdViewMode.PAN`，我们通过 view.mode = ... 切换。 */
 	let currentViewMode = 'select';
+
+		// ── 实体选中 / 删除 ──────────────────────────────────────────────
+		const MAX_SEL_ENTITIES = 200;
+		/** handle(uppercase) → entity 的查找 Map，每次 loadDocument 重建。 */
+		let entityLookup = new Map();
+		/** 当前选中的实体信息列表（仅包含 entityLookup 命中的）。 */
+		let lastSelectionEntities = [];
+		const selBadgeEl = $$('wfm-cad-sel-badge');
+		const ctxMenuEl = $$('wfm-cad-ctx-menu');
 	/** 由 cad-simple-viewer eventBus 'fonts-not-found' / 'fonts-not-loaded' 收集的、
 	 *  fontLoader 真正尝试加载但失败的字体名集合（小写 + 已 strip 扩展名）。
 	 *  比扫 textStyleTable 更精准 —— 那种方式会把已经 alias 到 simhei 的字体也错算
@@ -148,19 +157,25 @@
 	}
 
 	/**
-	 * 带重试的 fetch。webview 资源服务（`vscode-cdn.net`）偶尔会返回纯文本
-	 * "Request Timeout" 而不是预期的内容（受 service worker / 限速影响），重试
-	 * 几次基本能恢复。
+	 * 带重试 + 单次超时的 fetch。webview 资源服务（`vscode-cdn.net`）偶尔会
+	 * 返回纯文本 "Request Timeout"，更糟的情况是 service worker 卡住导致 fetch
+	 * **永远不返回**——此前 fetchWithRetry 没有单次超时，整个 viewer 初始化会
+	 * 永久停在"正在初始化 CAD 渲染引擎…"。这里用 AbortController 给每次 attempt
+	 * 加 perAttemptTimeoutMs 的硬超时，超时按一次失败处理、走重试间隔，最终
+	 * 保证总耗时有上限。
 	 *
 	 * @param {string} url
 	 * @param {number} maxAttempts
-	 * @param {string} expectKind - 'json' | 'text' | 'binary'
+	 * @param {'json' | 'text' | 'binary'} expectKind
+	 * @param {number} perAttemptTimeoutMs
 	 */
-	async function fetchWithRetry(url, maxAttempts = 5, expectKind = 'text') {
+	async function fetchWithRetry(url, maxAttempts = 5, expectKind = 'text', perAttemptTimeoutMs = 8000) {
 		let lastErr;
 		for (let i = 0; i < maxAttempts; i++) {
+			const ctl = new AbortController();
+			const timer = setTimeout(() => ctl.abort(), perAttemptTimeoutMs);
 			try {
-				const resp = await fetch(url, { cache: 'no-cache' });
+				const resp = await fetch(url, { cache: 'no-cache', signal: ctl.signal });
 				if (!resp.ok) { throw new Error(`HTTP ${resp.status}`); }
 				if (expectKind === 'json') {
 					const txt = await resp.text();
@@ -176,9 +191,17 @@
 				return await resp.arrayBuffer();
 			} catch (err) {
 				lastErr = err;
+				const aborted = ctl.signal.aborted;
 				const wait = 200 * (i + 1);
-				console.warn(LOG_PREFIX, `fetch retry ${i + 1}/${maxAttempts}`, url, err);
+				console.warn(
+					LOG_PREFIX,
+					`fetch retry ${i + 1}/${maxAttempts}${aborted ? ' (timed out)' : ''}`,
+					url,
+					err,
+				);
 				await new Promise((r) => setTimeout(r, wait));
+			} finally {
+				clearTimeout(timer);
 			}
 		}
 		throw lastErr;
@@ -237,6 +260,28 @@
 		return out;
 	}
 
+	/**
+	 * 给 promise 加一个总兜底超时。任意一个 fetch / wasm 编译 / vendor 内部
+	 * await 卡死都会被这里 reject 出来，避免 viewer 永远停在某个状态。
+	 *
+	 * @template T
+	 * @param {Promise<T>} promise
+	 * @param {number} timeoutMs
+	 * @param {string} label
+	 * @returns {Promise<T>}
+	 */
+	function withTimeout(promise, timeoutMs, label) {
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				reject(new Error(`${label} 超时 (${timeoutMs}ms)`));
+			}, timeoutMs);
+			promise.then(
+				(v) => { clearTimeout(timer); resolve(v); },
+				(e) => { clearTimeout(timer); reject(e); },
+			);
+		});
+	}
+
 	async function ensureViewer(initialIsDark) {
 		if (viewerReady && docManager) {
 			return docManager;
@@ -244,6 +289,15 @@
 		setStatus('正在初始化 CAD 渲染引擎…', false);
 		applyTheme(initialIsDark);
 
+		// 总兜底：所有内部 await（vendor bundle 准备就绪、prefetch fonts.json、
+		// rewriteWorkersToBlob 各 worker 拉取）加起来正常 ≤ 几秒，最坏 ≤ 30s。
+		// 超过 60s 基本可以判定是 webview 资源服务被 service worker 卡死，让用户
+		// 看到清晰错误信息而不是无限转圈。
+		return withTimeout(doEnsureViewer(initialIsDark), 60_000, 'CAD 引擎初始化');
+	}
+
+	async function doEnsureViewer(initialIsDark) {
+		void initialIsDark;
 		try {
 			const bootstrap = await waitForBootstrap();
 			// 提前装 fonts-not-found / fonts-not-loaded 监听器：createInstance
@@ -340,12 +394,23 @@
 			return docManager;
 		} catch (err) {
 			console.error(LOG_PREFIX, 'bootstrap failed', err);
-			showFatalError(
-				'CAD 渲染引擎未就绪',
-				'缺少 vendor 的 cad-viewer.iife.js。请在 wfm-ide 目录运行: '
-					+ '`npm install --save-dev @mlightcad/cad-simple-viewer ... esbuild` 然后 '
-					+ '`node scripts/build-cad-viewer.mjs`，重启 IDE 后再试。',
-			);
+			const msg = err && err.message ? err.message : String(err);
+			if (msg.includes('WfmCadBootstrap 未就绪')) {
+				showFatalError(
+					'CAD 渲染引擎未就绪',
+					'缺少 vendor 的 cad-viewer.iife.js。请在 wfm-ide 目录运行: '
+						+ '`npm install --save-dev @mlightcad/cad-simple-viewer ... esbuild` 然后 '
+						+ '`node scripts/build-cad-viewer.mjs`，重启 IDE 后再试。',
+				);
+			} else {
+				// 走到这条分支基本是网络 / service worker 卡死，或 wasm 编译失败。
+				showFatalError(
+					`CAD 渲染引擎初始化失败: ${msg}`,
+					'若提示"超时"，多半是 vscode-cdn 资源服务被 service worker 卡了。'
+						+ '建议：① 关闭并重新打开此 CAD 文件；② 仍失败时，命令面板执行'
+						+ '"Developer: Reload Window"刷新 webview。',
+				);
+			}
 			throw err;
 		}
 	}
@@ -702,6 +767,145 @@
 		}
 	}
 
+	// ── 实体选中 ────────────────────────────────────────────────────────
+
+	function buildEntityLookup() {
+		entityLookup.clear();
+		const db = docManager?.curDocument?.database;
+		if (!db) return;
+		try {
+			const modelSpace = db.tables?.blockTable?.modelSpace;
+			if (!modelSpace) return;
+			const iter = modelSpace.newIterator();
+			for (const entity of iter) {
+				const handle = (entity.objectId || '').toUpperCase();
+				if (handle) {
+					entityLookup.set(handle, entity);
+				}
+			}
+			reportDebug('entity-lookup', { count: entityLookup.size });
+		} catch (err) {
+			console.warn(LOG_PREFIX, 'buildEntityLookup failed', err);
+		}
+	}
+
+	function extractEntityInfo(entity) {
+		const info = {
+			handle: entity.objectId || '',
+			entityType: entity.dxfTypeName || 'UNKNOWN',
+			layer: entity.layer || '0',
+		};
+		if (typeof entity.textString === 'string' && entity.textString) {
+			info.textContent = entity.textString;
+		}
+		try {
+			const c = entity.color;
+			if (c && typeof c.colorIndex === 'number') {
+				info.colorIndex = c.colorIndex;
+			}
+		} catch {}
+		return info;
+	}
+
+	function handleSelectionChange() {
+		const view = docManager?.curView;
+		if (!view) return;
+		const ids = view.selectionSet?.ids || [];
+		const entities = [];
+		for (const id of ids) {
+			if (entities.length >= MAX_SEL_ENTITIES) break;
+			const entity = entityLookup.get(id.toUpperCase());
+			if (!entity) continue;
+			entities.push(extractEntityInfo(entity));
+		}
+		lastSelectionEntities = entities;
+		updateSelBadge();
+	}
+
+	function updateSelBadge() {
+		if (!selBadgeEl) return;
+		if (lastSelectionEntities.length > 0) {
+			selBadgeEl.hidden = false;
+			selBadgeEl.textContent = `已选中 ${lastSelectionEntities.length} 个实体（右键可操作）`;
+		} else {
+			selBadgeEl.hidden = true;
+		}
+	}
+
+	let selectionListenersInstalled = false;
+	function installSelectionListeners() {
+		if (selectionListenersInstalled) return;
+		const view = docManager?.curView;
+		if (!view?.selectionSet?.events) return;
+		try {
+			view.selectionSet.events.selectionAdded.addEventListener(() => handleSelectionChange());
+			view.selectionSet.events.selectionRemoved.addEventListener(() => handleSelectionChange());
+			selectionListenersInstalled = true;
+			reportDebug('selection-listeners-installed', {});
+		} catch (err) {
+			console.warn(LOG_PREFIX, 'installSelectionListeners failed', err);
+		}
+	}
+
+	// ── 右键菜单 ────────────────────────────────────────────────────────
+
+	function showContextMenu(x, y) {
+		if (!ctxMenuEl || lastSelectionEntities.length === 0) return;
+		const sendItem = ctxMenuEl.querySelector('[data-action="send-selection"]');
+		if (sendItem) {
+			sendItem.textContent = `发送选中到对话 (${lastSelectionEntities.length})`;
+		}
+		const delItem = ctxMenuEl.querySelector('[data-action="delete-selection"]');
+		if (delItem) {
+			delItem.textContent = `删除 (${lastSelectionEntities.length})`;
+		}
+		const vw = window.innerWidth;
+		const vh = window.innerHeight;
+		ctxMenuEl.hidden = false;
+		const rect = ctxMenuEl.getBoundingClientRect();
+		ctxMenuEl.style.left = `${Math.min(x, vw - rect.width - 4)}px`;
+		ctxMenuEl.style.top = `${Math.min(y, vh - rect.height - 4)}px`;
+	}
+
+	function hideContextMenu() {
+		if (ctxMenuEl) ctxMenuEl.hidden = true;
+	}
+
+	// ── 删除实体 ────────────────────────────────────────────────────────
+
+	function deleteSelectedEntities() {
+		if (lastSelectionEntities.length === 0) return;
+		let erased = 0;
+		for (const info of lastSelectionEntities) {
+			const entity = entityLookup.get(info.handle.toUpperCase());
+			if (!entity) continue;
+			try {
+				entity.erase();
+				entityLookup.delete(info.handle.toUpperCase());
+				erased++;
+			} catch (err) {
+				console.warn(LOG_PREFIX, 'erase failed for handle', info.handle, err);
+			}
+		}
+
+		lastSelectionEntities = [];
+		updateSelBadge();
+		hideContextMenu();
+
+		if (erased > 0 && currentDoc) {
+			const dxfText = tryExportDxfText();
+			if (dxfText) {
+				currentDoc.dxfText = dxfText;
+				vscode.postMessage({
+					kind: 'editsApplied',
+					dxfText,
+					sourceUri: currentDoc.sourceUri,
+				});
+			}
+			reportDebug('entities-deleted', { erased });
+		}
+	}
+
 	async function loadDocument(loadMessage) {
 		const { fileName, fileKind, uri, bytes, isDark } = loadMessage;
 		filenameEl.textContent = fileName;
@@ -774,6 +978,9 @@
 
 			currentDoc = { fileName, sourceUri: uri, dxfText };
 			refreshLayerPanel();
+			buildEntityLookup();
+			// selectionListenersInstalled 只装一次；后续 load 会复用。
+			installSelectionListeners();
 			// 真正能拿到 activeLayoutView._cameraControls 的时机要等 layout 切换完毕。
 			// 这里再 configure 一次，把 OrbitControls 的右键 pan 应用上。
 			configureCanvasInteractions();

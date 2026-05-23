@@ -8,7 +8,8 @@ import { localize } from '../../../../nls.js';
 import { ContextKeyExpr, ContextKeyExpression } from '../../../../platform/contextkey/common/contextkey.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { MenuRegistry } from '../../../../platform/actions/common/actions.js';
-import { ProductQualityContext } from '../../../../platform/contextkey/common/contextkeys.js';
+// WFM Studio: ProductQualityContext 只被 tip.openAgentsWindow 用，该 tip 已注释。
+// import { ProductQualityContext } from '../../../../platform/contextkey/common/contextkeys.js';
 import { ChatContextKeys } from '../common/actions/chatContextKeys.js';
 import { ChatConfiguration, ChatModeKind } from '../common/constants.js';
 import { IsSessionsWindowContext } from '../../../common/contextkeys.js';
@@ -412,25 +413,12 @@ export const TIP_CATALOG: readonly ITipDefinition[] = [
 		when: ChatContextKeys.chatSessionType.isEqualTo(localChatSessionType),
 		excludeWhenToolsInvoked: ['listDebugEvents'],
 	},
-	{
-		id: 'tip.openAgentsWindow',
-		tier: ChatTipTier.Qol,
-		buildMessage() {
-			return new MarkdownString(
-				localize(
-					'tip.openAgentsWindow',
-					"Try the [Agents Application](command:workbench.action.openAgentsWindow \"Open Agents Application\") to run multiple agents simultaneously and manage your coding sessions."
-				)
-			);
-		},
-		when: ContextKeyExpr.and(
-			ProductQualityContext.notEqualsTo('stable'),
-			IsSessionsWindowContext.negate(),
-			ChatContextKeys.chatModeKind.isEqualTo(ChatModeKind.Agent),
-		),
-		excludeWhenCommandsExecuted: ['workbench.action.openAgentsWindow'],
-		dismissWhenCommandsClicked: ['workbench.action.openAgentsWindow'],
-	},
+	// WFM Studio: 移除「Try the Agents Application」tip —— 命令本身已经在 chat.contribution.ts 里
+	// 不再注册，tip 即使展示出来点了也调不动。直接拿掉避免误导。
+	// {
+	// 	id: 'tip.openAgentsWindow',
+	// 	... (原 Microsoft Copilot Agents 子窗口入口的小贴士)
+	// },
 	{
 		id: 'tip.copilotCli',
 		tier: ChatTipTier.Qol,

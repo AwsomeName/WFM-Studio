@@ -1,12 +1,12 @@
 # CAD 审图 Agent 工具化架构设计
 
-> **版本**：v1.0（2026-05-17）
-> **状态**：设计阶段，待实现
+> **版本**：v1.0（2026-05-17）；**状态更新**（2026-05-22）：工具已实现为 MCP 工具（`@mcp.tool()`），注册在 `wfm_mcp_server.py` 中，而非原设计的 `@function_tool` + `cad/tools.py`。整体架构（3 层工具、DWG fallback、route 层简化）保持不变。
 > **关联**：
 > - [ARCH_CAD_REVIEW.md](ARCH_CAD_REVIEW.md) — v0.2 CAD 浏览 + 审图当前管线（本文为其重构方案）
 > - [CAD_AI_FEASIBILITY.md](CAD_AI_FEASIBILITY.md) — 效果可行性与能力边界
 > - [CAD_AI_SELECTION_REVIEW.md](CAD_AI_SELECTION_REVIEW.md) — 选区审图方案
-> - [ARCH_AGENT_SDK_NATIVE.md](ARCH_AGENT_SDK_NATIVE.md) — 对话后端正式规格
+> - [ARCH_AGENT_SDK_NATIVE.md](ARCH_AGENT_SDK_NATIVE.md) — [已废弃] 旧 OpenAI Agents SDK 规格
+> - [`wfm-agents/README.md`](../wfm-agents/README.md) — 当前 Claude Code CLI + MCP 架构文档
 >
 > **目标**：将 CAD 审图从"route 层硬编码解析 + agent 复读摘要"重构为"agent + 工具"范式，agent 自主决定调哪些工具、怎么分析。
 
@@ -38,7 +38,7 @@ v0.2 的审图链路：
 1. **后端是 CAD 文件解析的唯一责任方**。前端只负责告诉后端"审哪个文件"
 2. **agent 自主编排**。agent 拥有工具，自己决定调哪些、怎么组合、调几次
 3. **按需取数据**。小文件一次拿完，大文件按图层/类别分步查
-4. **工具可复用**。标准 `@function_tool`，可被任何 agent 调用，未来可暴露为 MCP
+4. **工具可复用**。标准 `@mcp.tool()`，可被任何 agent 调用，已作为 MCP 服务器暴露
 
 ---
 
@@ -73,11 +73,11 @@ v0.2 的审图链路：
 └───────────────────────┬───────────────────────────┘
                         │
                         ▼
-┌──────── cad_review_agent ─────────────────────────┐
+┌──────── Claude Code CLI + MCP 工具 ──────────────┐
 │                                                    │
-│  system prompt: "你是审图工程师，用工具检查图纸"    │
+│  system prompt (claude_runner.py): "你是审图工程师"│
 │                                                    │
-│  工具集（8 个 @function_tool）：                    │
+│  MCP 工具集（8 个 @mcp.tool()）：                  │
 │    cad_file_read            总览                   │
 │    cad_extract_texts        文字详情               │
 │    cad_extract_dims         标注详情               │
@@ -87,7 +87,7 @@ v0.2 的审图链路：
 │    cad_check_titleblock     标题块                 │
 │    cad_check_dim_accuracy   标注精度               │
 │                                                    │
-│  agent 自主决定调哪些工具、调几次、怎么组合         │
+│  Claude 自主决定调哪些工具、调几次、怎么组合       │
 │                                                    │
 └────────────────────────────────────────────────────┘
 ```
@@ -100,8 +100,8 @@ v0.2 的审图链路：
 | prompt 里有什么 | 塞满整个 DXF 摘要 | 只有文件路径 + 用户要求 |
 | 小文件 vs 大文件 | 同样塞全部摘要 | agent 按需取，大文件分步查 |
 | .dwg 审图 | 依赖前端 WASM 转换 | 后端直接读 .dwg |
-| 扩展新检查项 | 改 route 层 + parser + prompt | 加一个 `@function_tool` |
-| 工具可复用性 | 不可复用 | 可被任何 agent / MCP 调用 |
+| 扩展新检查项 | 改 route 层 + parser + prompt | 加一个 `@mcp.tool()` |
+| 工具可复用性 | 不可复用 | 已作为 MCP 服务器暴露，可被任何调用方使用 |
 
 ---
 
@@ -112,8 +112,8 @@ v0.2 的审图链路：
 #### `cad_file_read`
 
 ```python
-@function_tool
-def cad_file_read(ctx: RunContextWrapper, path: str) -> str:
+@mcp.tool()
+def cad_file_read(path: str) -> str:
     """读取 CAD 文件并返回结构化总览摘要。
 
     支持 .dxf 和 .dwg 格式。返回文件元数据、图层列表（含实体计数）、
@@ -160,9 +160,8 @@ def cad_file_read(ctx: RunContextWrapper, path: str) -> str:
 #### `cad_extract_texts`
 
 ```python
-@function_tool
+@mcp.tool()
 def cad_extract_texts(
-    ctx: RunContextWrapper,
     path: str,
     layer: str | None = None,
 ) -> str:
@@ -177,9 +176,8 @@ def cad_extract_texts(
 #### `cad_extract_dims`
 
 ```python
-@function_tool
+@mcp.tool()
 def cad_extract_dims(
-    ctx: RunContextWrapper,
     path: str,
     layer: str | None = None,
 ) -> str:
@@ -194,8 +192,8 @@ def cad_extract_dims(
 #### `cad_extract_blocks`
 
 ```python
-@function_tool
-def cad_extract_blocks(ctx: RunContextWrapper, path: str) -> str:
+@mcp.tool()
+def cad_extract_blocks(path: str) -> str:
     """提取块定义（BLOCK），含名称、实体组成、嵌套关系。
 
     Args:
@@ -206,9 +204,8 @@ def cad_extract_blocks(ctx: RunContextWrapper, path: str) -> str:
 #### `cad_layer_inspect`
 
 ```python
-@function_tool
+@mcp.tool()
 def cad_layer_inspect(
-    ctx: RunContextWrapper,
     path: str,
     layer: str,
 ) -> str:
@@ -225,9 +222,8 @@ def cad_layer_inspect(
 #### `cad_check_naming`
 
 ```python
-@function_tool
+@mcp.tool()
 def cad_check_naming(
-    ctx: RunContextWrapper,
     path: str,
     rule_set: str = "default",
 ) -> str:
@@ -242,8 +238,8 @@ def cad_check_naming(
 #### `cad_check_titleblock`
 
 ```python
-@function_tool
-def cad_check_titleblock(ctx: RunContextWrapper, path: str) -> str:
+@mcp.tool()
+def cad_check_titleblock(path: str) -> str:
     """检查标题块字段完整性和格式（日期格式、图号规范等）。
 
     Args:
@@ -254,9 +250,8 @@ def cad_check_titleblock(ctx: RunContextWrapper, path: str) -> str:
 #### `cad_check_dim_accuracy`
 
 ```python
-@function_tool
+@mcp.tool()
 def cad_check_dim_accuracy(
-    ctx: RunContextWrapper,
     path: str,
     tolerance: float = 0.01,
 ) -> str:
@@ -331,57 +326,40 @@ def save_temp_dxf(dxf_text: str, source_label: str = "viewer") -> Path:
 
 ---
 
-## 5. Agent 定义
+## 5. 当前实现
 
-### 5.1 cad_review_agent
+### 5.1 MCP 工具注册
+
+原设计的 `cad_review_agent`（`Agent` 类 + `@function_tool`）已被 **Claude Code CLI + MCP 工具**取代。8 个 CAD 审图工具注册在 `wfm_mcp_server.py` 中，通过 `@mcp.tool()` 装饰器定义：
 
 ```python
-cad_review_agent: Agent[WfmAgentContext] = Agent(
-    name="cad.review",
-    instructions=(
-        "你是一位资深 CAD 图纸审图工程师，专长于工业制造与船舶设计图纸。\n"
-        "你有 cad_file_read / cad_extract_* / cad_check_* 等工具。\n\n"
-        "审图流程：\n"
-        "1. 先调 cad_file_read 获取总览\n"
-        "2. 根据总览发现的问题，自主决定调哪些工具深挖\n"
-        "3. 用户要求'大概看看'→ 只调 cad_file_read 即可出结论\n"
-        "4. 用户要求'完整审图'→ 逐项调用检查工具\n"
-        "5. 小文件可以一次拿完所有信息；大文件按图层/类别分步查\n"
-        "6. 所有结论必须基于工具返回的数据，不臆造\n\n"
-        "输出格式（严格 JSON，不要用 markdown 包裹）：\n"
-        '{"summary":"总体评价","issues":[{"severity":"error|warning|info",'
-        '"category":"分类","title":"问题标题","description":"详细描述",'
-        '"suggestion":"建议","citations":[{"handle":"","layer":"","location":"","text":""}]}],'
-        '"risks":["风险点"],"info_gaps":["信息缺口"]}\n\n'
-        "severity 只能从 error / warning / info 三档里选。\n"
-        "若信息不足以判断某点，列入 info_gaps，不要臆造。\n"
-        "若能定位到具体实体，填 citations.handle / layer / location。\n"
-    ),
-    tools=[
-        cad_file_read,
-        cad_extract_texts,
-        cad_extract_dims,
-        cad_extract_blocks,
-        cad_layer_inspect,
-        cad_check_naming,
-        cad_check_titleblock,
-        cad_check_dim_accuracy,
-    ],
-    tool_use_behavior="run_llm_again",
-)
+# wfm_mcp_server.py
+@mcp.tool()
+def cad_file_read(path: str) -> str:
+    """读取 CAD 文件并返回结构化总览摘要。"""
+    ...
+
+@mcp.tool()
+def cad_extract_texts(path: str, layer: str | None = None) -> str:
+    """提取文字内容（TEXT + MTEXT）。"""
+    ...
+# ... 共 8 个 CAD 审图工具 + 2 个 workspace 工具 + 5 个 CAD 建模工具 + 1 个 DOCX 工具
 ```
 
-### 5.2 与其他 agent 的关系
+workspace_root 通过 `WFM_WORKSPACE_ROOT` 环境变量注入 MCP 服务器（由 `claude_runner.py` 在 `--mcp-config` 中配置）。
+
+### 5.2 与其他工具的关系
 
 ```
-POST /v1/chat
+POST /v1/chat/stream
   │
-  ├─ 检测到 CAD 文件引用 ──→ cad_review_agent（8 个 CAD 工具）
-  ├─ 检测到 DOCX 文件 ────→ docx_review_agent（docx_read 等）
-  └─ 其他 ────────────────→ plain_chat_agent（workspace_read/write）
+  ├─ Claude Code CLI 自动判断意图
+  │   ├─ CAD 审图 → 调用 cad_file_read / cad_extract_* / cad_check_* 等 MCP 工具
+  │   ├─ DOCX 审阅 → 调用 docx_read MCP 工具
+  │   ├─ 3D 建模 → 调用 cad_generate_step / cad_render 等 MCP 工具
+  │   └─ 文件读写 → 调用 workspace_read / workspace_write MCP 工具
+  └─ 所有工具共享 WFM_WORKSPACE_ROOT
 ```
-
-三个 agent 互相独立，共享 `WfmAgentContext`。
 
 ---
 
@@ -482,13 +460,11 @@ wfm_agents/
 │       ├── __init__.py
 │       └── schema.py      保留不变（CadReviewReport 等）
 ├── agent_v2/
-│   ├── agents.py          改：cad_review_agent 注册工具 + 新 prompt
-│   ├── tools.py           保留不变（workspace_read/write 等）
-│   ├── context.py         保留不变
-│   ├── runner.py          改：cad 分支不再预处理摘要，只传文件路径
-│   └── sse.py             保留不变
+│   ├── claude_runner.py    Claude Code CLI 子进程调用 + NDJSON → SSE 映射
+│   ├── wfm_mcp_server.py   MCP 工具服务器（workspace + CAD + DOCX 工具）
+│   └── sse.py              SSE 事件编码
 └── routes/
-    └── chat.py            改：简化为路径解析 + agent 选择
+    └── chat.py             简化为路径解析 + prompt 构建
 ```
 
 ---
@@ -501,10 +477,9 @@ wfm_agents/
 |------|------|------|
 | DWG→DXF fallback 转换 | `cad/dwg.py` 新增 | 0.5 天 |
 | parser.py 拆分为粒度化子函数 | `cad/parser.py` 改 | 0.5 天 |
-| 8 个 @function_tool 定义 | `cad/tools.py` 新增 | 1-2 天 |
-| cad_review_agent 注册工具 + prompt | `agent_v2/agents.py` 改 | 0.5 天 |
-| runner.py 简化 cad 分支 | `agent_v2/runner.py` 改 | 0.5 天 |
-| chat.py 路径解析 + agent 选择 | `routes/chat.py` 改 | 0.5 天 |
+| 8 个 MCP 工具定义 | `agent_v2/wfm_mcp_server.py` | 1-2 天 |
+| claude_runner.py + NDJSON→SSE | `agent_v2/claude_runner.py` | 0.5 天 |
+| chat.py 路径解析 + prompt 构建 | `routes/chat.py` 改 | 0.5 天 |
 | 前端 | 不改（已在传 cad_source_uri） | 0 |
 
 ### Phase 2 — 几何工具 + 扩展
@@ -577,5 +552,6 @@ cad_review_agent 收到:
 | [ARCH_CAD_REVIEW.md](ARCH_CAD_REVIEW.md) | 当前 v0.2 管线，本文为其中 §3（后端）和 §8（审图链路）的重构方案 |
 | [CAD_AI_FEASIBILITY.md](CAD_AI_FEASIBILITY.md) | §6 工具底座清单 → 本文的工具设计来源 |
 | [CAD_AI_SELECTION_REVIEW.md](CAD_AI_SELECTION_REVIEW.md) | Phase 2 扩展方向（选区审图 + 截图多模态） |
-| [ARCH_AGENT_SDK_NATIVE.md](ARCH_AGENT_SDK_NATIVE.md) | 对话后端规格，本文的 agent + 工具注册在其框架内 |
+| [ARCH_AGENT_SDK_NATIVE.md](ARCH_AGENT_SDK_NATIVE.md) | [已废弃] 旧 OpenAI Agents SDK 规格 |
+| [`wfm-agents/README.md`](../wfm-agents/README.md) | 当前 Claude Code CLI + MCP 架构文档 |
 | [TASK_SCENARIOS.md](TASK_SCENARIOS.md) | 用户故事 4 的技术实现方案更新为本文 |

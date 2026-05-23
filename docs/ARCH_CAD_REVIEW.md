@@ -4,9 +4,9 @@
 > **关联**：[USAGE_CAD_VIEWER.md](USAGE_CAD_VIEWER.md)（用户操作指南）、[PRD.md](PRD.md)、[TASK_SCENARIOS.md](TASK_SCENARIOS.md)、[UPSTREAM_PATCHES.md](UPSTREAM_PATCHES.md)、**[ARCH_AGENT_SDK_NATIVE.md](ARCH_AGENT_SDK_NATIVE.md)（对话后端正式规格）**、~~[ARCH_AGENT_GATEWAY.md](ARCH_AGENT_GATEWAY.md)~~（已废弃，保留为历史背景）
 > **变更**：v0.1 走"后端 spawn ODAFileConverter + 前端文本预览"路线，已被实测证伪（macOS 上 ODA 在 headless 子进程里 NSXPC bootstrap 失败、SIGABRT）。v0.2 改走"前端 in-browser 渲染（cad-viewer + libredwg-web）+ 后端 ezdxf 摘要"路线，**彻底移除后端的 DWG→DXF 转换链路**，并把中央编辑区从「文本预览」升级为**真 CAD viewer**（pan/zoom/选择/图层显隐/Hatch GPU 渲染）。
 >
-> **2026-05-14 增量**：审图的**后端调用链路**已切到 **OpenAI Agents SDK**（`agent_v2/`）。路由层通过 `agent_v2.runner.run_chat()` 调用 `cad_review_agent`，工具由 `@function_tool` 注册，GLM-5.1 输出的 JSON 经手动 code-fence 剥离后做 schema 验证。viewer / 字体管线 / DXF 摘要等本文其余内容**保持不变**。新链路细节见 [`ARCH_AGENT_SDK_NATIVE.md`](ARCH_AGENT_SDK_NATIVE.md) 和 [`WHY_AGENTS_SDK.md`](WHY_AGENTS_SDK.md)。
+> **2026-05-14 增量**：审图的**后端调用链路**已切到 **Claude Code CLI + MCP 工具服务器**（`agent_v2/claude_runner.py` + `wfm_mcp_server.py`）。Claude 通过 MCP 工具（`cad_file_read`、`cad_extract_*`、`cad_check_*`）自主完成审图。viewer / 字体管线 / DXF 摘要等本文其余内容**保持不变**。详见 [`wfm-agents/README.md`](../wfm-agents/README.md)。
 >
-> **⚠️ 2026-05-17 更新**：后端审图架构已全面重构为"agent + 工具"范式，详见 **[ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md)**（v1.0）。本文 §3（后端 DXF 摘要管线）和 §8（审图链路）中的"route 层解析 + agent 复读摘要"模式已被取代：新方案中 `cad_review_agent` 拥有 8 个 `@function_tool` 工具，自主决定调哪些工具、怎么分析，route 层只做文件路径标准化。**前端（§4）和字体管线（§4.6）保持不变。**
+> **⚠️ 2026-05-17 更新**：后端审图架构已全面重构为"agent + 工具"范式，详见 **[ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md)**（v1.0）。本文 §3（后端 DXF 摘要管线）和 §8（审图链路）中的"route 层解析 + agent 复读摘要"模式已被取代：新方案中 Claude 通过 8 个 MCP 工具（`@mcp.tool()`）自主决定调哪些工具、怎么分析，route 层只做文件路径标准化。**前端（§4）和字体管线（§4.6）保持不变。**
 
 ---
 

@@ -23,13 +23,15 @@ import { IWorkbenchContribution, WorkbenchPhase, registerWorkbenchContribution2 
 import { Action2, MenuId, registerAction2 } from '../../../../../platform/actions/common/actions.js';
 import { ContextKeyExpr } from '../../../../../platform/contextkey/common/contextkey.js';
 import { ServicesAccessor } from '../../../../../platform/instantiation/common/instantiation.js';
-import { IFileService } from '../../../../../platform/files/common/files.js';
+
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { ResourceContextKey } from '../../../../common/contextkeys.js';
 import { ExplorerFolderContext } from '../../../files/common/files.js';
 import { localize, localize2 } from '../../../../../nls.js';
 import { basename } from '../../../../../base/common/resources.js';
-import { IWfmAgentClientService } from '../../common/wfmAgentClient.js';
+import { ChatViewId, IChatWidgetService } from '../../../chat/browser/chat.js';
+import { ChatAgentLocation } from '../../../chat/common/constants.js';
+import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import {
 	CAD_VIEWER_EDITOR_ID,
 	CAD_VIEWER_EDITOR_LABEL,
@@ -149,29 +151,26 @@ class CadReviewFromExplorerAction extends Action2 {
 			return;
 		}
 
-		const fileService = accessor.get(IFileService);
 		const editorService = accessor.get(IEditorService);
-		const agentClient = accessor.get(IWfmAgentClientService);
-
 		const fileName = basename(resource);
 		const ext = extname(resource).toLowerCase();
 
 		if (ext === DXF_FILE_EXTENSION) {
-			// .dxf 是纯文本，直接读磁盘发 dxf_text
-			const content = await fileService.readFile(resource);
-			const dxfText = content.value.toString();
-			await agentClient.submitExternalChat({
-				message: localize(
+			// .dxf 是纯文本：打开 chat 面板，把文件作为附件传给 Claude agent。
+			const viewsService = accessor.get(IViewsService);
+			const chatWidgetService = accessor.get(IChatWidgetService);
+			await viewsService.openView(ChatViewId, true);
+			const widget = chatWidgetService.getWidgetsByLocations(ChatAgentLocation.Chat)[0]
+				?? chatWidgetService.lastFocusedWidget;
+			if (widget) {
+				widget.focusInput();
+				widget.attachmentModel.addFile(resource);
+				widget.setInput(localize(
 					'wfm.cad.explorer.reviewMessageDefault',
 					"请审一下当前 CAD 图（{0}），用通用方法逐项检查。",
 					fileName,
-				),
-				originLabel: `explorer: ${fileName}`,
-				extras: {
-					dxfText,
-					dxfSourceUri: resource.toString(),
-				},
-			});
+				));
+			}
 		} else {
 			// .dwg 需要 WASM 转换，打开 CAD Viewer（已有「AI 审图」按钮）
 			await editorService.openEditor({ resource });

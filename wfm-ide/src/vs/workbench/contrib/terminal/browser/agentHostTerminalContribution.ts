@@ -89,7 +89,7 @@ export class AgentHostTerminalContribution extends Disposable implements IWorkbe
 			} else if (displaying < entries.length) {
 				// Multiple hosts, none active — show a generic quickpick profile
 				desiredProfiles.set('__quickpick__', {
-					name: localize('agentHostTerminal.pick', "Agent Host\u2026"),
+					name: localize('agentHostTerminal.pick', "Agent Host…"),
 					address: '__quickpick__',
 					getConnection: () => undefined,
 				});
@@ -193,7 +193,7 @@ export class AgentHostTerminalContribution extends Disposable implements IWorkbe
 		};
 
 		const title = key === '__quickpick__'
-			? localize('agentHostTerminal.pick', "Agent Host\u2026")
+			? localize('agentHostTerminal.pick', "Agent Host…")
 			: localize('agentHostTerminal.profileName', "Agent Host ({0})", entry.name);
 
 		const store = new DisposableStore();

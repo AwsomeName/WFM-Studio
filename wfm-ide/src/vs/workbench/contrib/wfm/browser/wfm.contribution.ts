@@ -1,75 +1,45 @@
 /*---------------------------------------------------------------------------------------------
  *  WFM Studio contributions.
  *
- *  Registers the AI chat pane on the right AuxiliaryBar plus the HTTP client
- *  service it uses. See docs/PLAN.md §8.2 Step B for the minimal-closed-loop
- *  design.
+ *  Adds WFM-specific Explorer context-menu actions that route through the
+ *  upstream Chat UI (wired to the local Claude Code CLI by
+ *  contrib/wfm/electron-browser/wfmClaudeAgent.contribution.ts).
  *--------------------------------------------------------------------------------------------*/
 
-import { Codicon } from '../../../../base/common/codicons.js';
 import { URI } from '../../../../base/common/uri.js';
-import { localize, localize2 } from '../../../../nls.js';
-import { SyncDescriptor } from '../../../../platform/instantiation/common/descriptors.js';
-import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
-import { Registry } from '../../../../platform/registry/common/platform.js';
-import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
-import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
-import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainerLocation } from '../../../common/views.js';
+import { localize2 } from '../../../../nls.js';
 import { Action2, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
+import { IChatWidget } from '../../chat/browser/chat.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
-import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
 import { ExplorerFolderContext } from '../../files/common/files.js';
 import { ResourceContextKey } from '../../../common/contextkeys.js';
-import { basename, relativePath } from '../../../../base/common/resources.js';
-import { IWfmAgentClientService } from '../common/wfmAgentClient.js';
-import type { IWfmFileAttachment } from '../common/wfmAgentClient.js';
-import { WfmAgentClientService } from './wfmAgentClientService.js';
-import { WfmChatViewPane } from './wfmChatViewPane.js';
+import { ChatViewId, IChatWidgetService } from '../../chat/browser/chat.js';
+import { ChatAgentLocation } from '../../chat/common/constants.js';
+import { IViewsService } from '../../../services/views/common/viewsService.js';
 
-const WFM_VIEW_CONTAINER_ID = 'workbench.view.wfm';
+/**
+ * Reveal the Chat view (right-side AuxiliaryBar) and return the focused widget.
+ */
+async function revealChatWidget(accessor: ServicesAccessor): Promise<IChatWidget | undefined> {
+	const viewsService = accessor.get(IViewsService);
+	const chatWidgetService = accessor.get(IChatWidgetService);
 
-const wfmViewIcon = registerIcon(
-	'wfm-view-icon',
-	Codicon.commentDiscussion,
-	localize('wfmViewIcon', 'WFM Studio 任务助手侧栏图标'),
-);
+	await viewsService.openView(ChatViewId, true);
 
-registerSingleton(IWfmAgentClientService, WfmAgentClientService, InstantiationType.Delayed);
+	const widget = chatWidgetService.getWidgetsByLocations(ChatAgentLocation.Chat)[0]
+		?? chatWidgetService.lastFocusedWidget;
+	widget?.focusInput();
+	return widget;
+}
 
-const viewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer(
-	{
-		id: WFM_VIEW_CONTAINER_ID,
-		title: localize2('wfm.viewContainer.title', "WFM Studio"),
-		icon: wfmViewIcon,
-		order: 100,
-		ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [WFM_VIEW_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
-		storageId: WFM_VIEW_CONTAINER_ID,
-		hideIfEmpty: false,
-	},
-	ViewContainerLocation.AuxiliaryBar,
-	{ isDefault: true, doNotRegisterOpenCommand: false },
-);
+//#region --- Explorer 右键菜单: 发送到对话 (任意非目录文件) ---
 
-const chatViewDescriptor: IViewDescriptor = {
-	id: WfmChatViewPane.ID,
-	name: localize2('wfm.chat.name', "任务对话"),
-	containerIcon: wfmViewIcon,
-	ctorDescriptor: new SyncDescriptor(WfmChatViewPane),
-	canToggleVisibility: true,
-	canMoveView: true,
-	order: 1,
-};
-
-Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([chatViewDescriptor], viewContainer);
-
-//#region --- Explorer 右键菜单: 发送到 WFM 对话 ---
-
-class SendToWfmChatAction extends Action2 {
+class SendFileToChatAction extends Action2 {
 	constructor() {
 		super({
 			id: 'wfm.explorer.sendToChat',
-			title: localize2('sendToWfmChat', "发送到 WFM 对话"),
+			title: localize2('wfm.explorer.sendToChat', "发送到对话"),
 			f1: false,
 			menu: [{
 				id: MenuId.ExplorerContext,
@@ -85,25 +55,16 @@ class SendToWfmChatAction extends Action2 {
 			return;
 		}
 
-		const agentClient = accessor.get(IWfmAgentClientService);
-		const contextService = accessor.get(IWorkspaceContextService);
-		const fileName = basename(resource);
+		const widget = await revealChatWidget(accessor);
+		if (!widget) {
+			return;
+		}
 
-		const workspace = contextService.getWorkspace();
-		const folder = workspace.folders[0];
-		const rel = folder ? (relativePath(folder.uri, resource) ?? resource.path) : resource.path;
-
-		const file: IWfmFileAttachment = {
-			uri: resource.toString(),
-			name: fileName,
-			relPath: rel,
-		};
-
-		await agentClient.attachFiles([file]);
+		widget.attachmentModel.addFile(resource);
 	}
 }
 
-registerAction2(SendToWfmChatAction);
+registerAction2(SendFileToChatAction);
 
 //#endregion
 
@@ -132,25 +93,16 @@ class DocxAmountReviewAction extends Action2 {
 			return;
 		}
 
-		const agentClient = accessor.get(IWfmAgentClientService);
-		const contextService = accessor.get(IWorkspaceContextService);
-		const fileName = basename(resource);
+		const widget = await revealChatWidget(accessor);
+		if (!widget) {
+			return;
+		}
 
-		const workspace = contextService.getWorkspace();
-		const folder = workspace.folders[0];
-		const rel = folder ? (relativePath(folder.uri, resource) ?? resource.path) : resource.path;
-
-		await agentClient.submitExternalChat({
-			message: '请核对这份文档中的所有金额：逐行验证 数量×单价=合价，核对每个表格的小计，核对总计，并交叉比对正文提及的金额与表格数据。',
-			extras: {
-				attachments: [{
-					uri: resource.toString(),
-					name: fileName,
-					relPath: rel,
-				}],
-			},
-			originLabel: rel,
-		});
+		widget.attachmentModel.addFile(resource);
+		widget.setInput(
+			'请核对这份文档中的所有金额：逐行验证 数量×单价=合价，核对每个表格的小计，核对总计，' +
+			'并交叉比对正文提及的金额与表格数据。',
+		);
 	}
 }
 

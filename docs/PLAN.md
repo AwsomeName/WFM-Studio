@@ -97,8 +97,8 @@ WFM/
 │       ├── server.py                   # FastAPI 入口（`uvicorn wfm_agents.server:app`）
 │       ├── routes/                     # HTTP 路由（薄层）
 │       ├── agent/                      # config.py 仍用（agent_v2 依赖）；其余已删，见 __init__.py deprecated 提示
-│       ├── agent_v2/                   # ★ 当前运行时：OpenAI Agents SDK（agents / tools / runner / sse）
-│       ├── cad/                        # CAD 摘要 / 审图 schema（被 agent/recipes/cad_review.py 调用）
+│       ├── agent_v2/                   # ★ 当前运行时：Claude Code CLI + MCP 工具服务器（claude_runner / wfm_mcp_server / sse）
+│       ├── cad/                        # DXF 解析 / DWG 转换 / 审图 checks
 │       ├── gateway/                    # [DEPRECATED] 旧 AgentGateway 抽象，保留兜底，不再被对话路径调用
 │       ├── engines/                    # [DEPRECATED] 旧 EngineAdapter（crewai / anthropic / maf / agenticx）
 │       └── observability/              # trace + error codes
@@ -412,9 +412,11 @@ registerAction2(class extends Action2 {
 
 **后端：同步搭建 wfm-agents**
 
-HTTP 与对话后端的单一规格见 **`docs/ARCH_AGENT_SDK_NATIVE.md`**（OpenAI Agents SDK runner：`/v1/chat`、`/v1/chat/stream`、流式回流、工具循环；**agent_v2 实现**）。
+HTTP 与对话后端的单一规格见 **`docs/ARCH_AGENT_SDK_NATIVE.md`**（已废弃，保留为历史背景）。当前运行时为 **Claude Code CLI + MCP 工具服务器**（`agent_v2/claude_runner.py` + `wfm_mcp_server.py`），详见 [`wfm-agents/README.md`](../wfm-agents/README.md)。
 
-> 2026-05-14 迁移记录：自研 SDK-native runner（`agent/runner.py`）→ OpenAI Agents SDK（`agent_v2/runner.py`）。旧 `agent/` 除 `config.py` 外已全部删除。详见 `docs/WHY_AGENTS_SDK.md`。
+> **迁移历史**：
+> - 2026-05-14：自研 SDK-native runner → OpenAI Agents SDK
+> - 2026-05-22：OpenAI Agents SDK → **Claude Code CLI + MCP 工具服务器**（当前架构）
 
 ```bash
 cd /Users/lc/Desktop/WFM
@@ -426,7 +428,7 @@ uv sync
 uv run uvicorn wfm_agents.server:app --reload --port 8765
 ```
 
-**验证：** WFM Studio 右侧面板能和 AI 对话；**流式 SSE** 与同步接口行为一致（SSE wire format 未变）；`engine` / `mode` 字段已废弃，前端零改动。
+**验证：** WFM Studio 右侧面板能和 AI 对话；**流式 SSE** 与同步接口行为一致（SSE wire format 兼容）；`engine` / `mode` 字段已废弃，前端零改动。
 
 ### 4.5 Phase 4 — Task Flow 面板 (1 周)
 
@@ -504,13 +506,13 @@ PPT 编辑采用 VS Code **CustomEditor API** + Webview 方案，整体生成与
 
 | 引擎 | 当前集成深度 | 代码位置 |
 |------|------------|----------|
-| **OpenAI Agents SDK** | ★ 当前主引擎——`agent_v2/` 全权接管对话 | `third_party/agents/openai-agents-python/` |
-| CrewAI | 旧——`engine=crewai` 路径已不再被 agent_v2 使用 | `third_party/agents/crewai/` |
-| Anthropic | 旧——`engine=anthropic` 路径已不再被 agent_v2 使用 | `third_party/anthropics/anthropic-sdk-python/` |
+| **Claude Code CLI + MCP** | ★ 当前主引擎——`agent_v2/claude_runner.py` + `wfm_mcp_server.py` | `wfm-agents/wfm_agents/agent_v2/` |
+| OpenAI Agents SDK | 已废弃——已迁移到 Claude Code CLI | `third_party/agents/openai-agents-python/` |
+| CrewAI | 已废弃——`engine=crewai` 路径已不再使用 | `third_party/agents/crewai/` |
 | MAF | 最浅——DevUI HTTP proxy | `third_party/agents/maf/` |
 | AgenticX | 最浅——DevUI HTTP proxy | `third_party/agents/agenticx/` |
 
-> 注：`engine` 字段已废弃。agent_v2 通过 `OpenAIProvider` 统一走 OpenAI Chat Completions 兼容接口。
+> 注：`engine` 字段已废弃。agent_v2 通过 Claude Code CLI 调用 Claude 模型，MCP 工具暴露所有 workspace/CAD/DOCX 操作。
 
 5 个评估场景：基础对话 / 文件读取 / PPT 大纲 / 标书完整生成 / 错误恢复
 
@@ -667,7 +669,7 @@ git checkout -b feat/doc-generation main
 
 合并顺序：backend-eval → doc-generation → ppt-editor → uni-studio-brand
 
-### 8.3 Agent 后端里程碑（`docs/DEV_AGENT_GATEWAY.md` M0→M6 + agent_v2 迁移）
+### 8.3 Agent 后端里程碑
 
 与 `docs/ARCH_AGENT_GATEWAY.md` 契约对齐的实现进度（在此勾选，避免与 Step 2 子项混淆）：
 
@@ -679,13 +681,20 @@ git checkout -b feat/doc-generation main
 - [x] **M5** `agenticx` in-tree 最小 `run_turn`/`stream_turn`；`maf` DevUI 适配
 - [ ] **M6** Eval harness（🔄 in-progress，`feat/backend-eval` 分支）
 
-**2026-05-14 agent_v2 迁移**（✅ 已完成）：
+**2026-05-14 OpenAI Agents SDK 迁移**（✅ 已完成，后已再次迁移）：
 
 - [x] Step 2 PoC：`agent_v2/` 并行搭建，验证 3 条路径（普通聊天、工具调用、CAD 审图）
-- [x] Step 3 切流量：`/v1/chat`、`/v1/chat/stream`、`/v1/cad/review` 全部切到 `agent_v2.runner`
-- [x] 删旧代码：`agent/runner.py`、`client.py`、`events.py`、`fallback.py`、`session_store.py`、`recipes/`、`tools/` 已删除
-- [x] 测试修复：75 passed, 0 failed
-- [x] 文档更新：`docs/WHY_AGENTS_SDK.md`、`docs/ARCH_AGENT_SDK_NATIVE.md`、`docs/DEV_AGENT_SDK_NATIVE.md`
+- [x] Step 3 切流量：所有路由切到 `agent_v2.runner`
+- [x] 删旧代码：`agent/` 下除 `config.py` 外已全部删除
+
+**2026-05-22 Claude Code CLI + MCP 迁移**（✅ 已完成，当前架构）：
+
+- [x] `agent_v2/claude_runner.py`：子进程调用 `claude -p <prompt> --output-format stream-json --verbose`
+- [x] `agent_v2/wfm_mcp_server.py`：MCP 工具服务器，所有工具注册为 `@mcp.tool()`
+- [x] 移除 `Agent()` 定义、`@function_tool`、`Runner.run_sync()`、`OpenAIProvider`、`WfmAgentContext`
+- [x] NDJSON → SSE 事件映射（兼容前端，新增 `thinking_delta` / `cad_edit`）
+- [x] 配置简化：仅需 `WFM_CLAUDE_MODEL`（默认 `sonnet`）
+- [x] 文档更新：`wfm-agents/README.md`、`docs/ARCH_AGENT_SDK_NATIVE.md`、`docs/DEV_AGENT_SDK_NATIVE.md`
 
 ### 8.4 Step 2 —— 最小闭环详细拆解（✅ 已完成，保留供参考）
 
@@ -713,7 +722,7 @@ wfm-agents/
 
 - 所有涉及文件 I/O 的接口必须带 `workspace_root` 参数
 - 服务端统一用 `Path.resolve().is_relative_to(workspace_root)` 做越界校验
-- 默认引擎自 2026-05 起走 **OpenAI Agents SDK**（`agent_v2/`），上游为 DashScope/GLM-5.1 等 OpenAI Chat Completions 兼容服务。`engine` / `mode` 字段已废弃（接受但忽略）。配置详见 [`wfm-agents/.env.example`](../wfm-agents/.env.example)
+- 默认引擎自 2026-05-22 起走 **Claude Code CLI + MCP 工具服务器**（`agent_v2/claude_runner.py` + `wfm_mcp_server.py`），使用 Claude 模型（默认 `sonnet`）。`engine` / `mode` 字段已废弃（接受但忽略）。配置详见 [`wfm-agents/.env.example`](../wfm-agents/.env.example)
 - 迁移记录见 `docs/WHY_AGENTS_SDK.md`
 - 默认端口 `8765`（避开 VS Code 常用端口）
 

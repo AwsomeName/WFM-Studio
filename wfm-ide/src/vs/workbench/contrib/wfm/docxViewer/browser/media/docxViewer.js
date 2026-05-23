@@ -15,6 +15,9 @@
 	var toolbar = document.getElementById('wfm-selection-toolbar');
 	var sendBtn = document.getElementById('wfm-send-selection');
 
+	var RENDER_TIMEOUT_MS = 60000;
+	var renderTimer = null;
+
 	function postMain(msg) {
 		if (vscodeApi) { vscodeApi.postMessage(msg); }
 		else { window.parent.postMessage(msg, '*'); }
@@ -23,6 +26,7 @@
 	function showError(text) {
 		if (errorEl) { errorEl.textContent = text; errorEl.style.display = 'block'; }
 		if (loadingEl) { loadingEl.style.display = 'none'; }
+		if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
 	}
 
 	// ── Paragraph index injection ───────────────────────────────
@@ -160,6 +164,11 @@
 
 				if (typeof docx !== 'undefined' && typeof docx.renderAsync === 'function') {
 					container.innerHTML = '';
+
+					renderTimer = setTimeout(function () {
+						showError('渲染超时，文档可能过于复杂。请尝试使用其他查看器打开。');
+					}, RENDER_TIMEOUT_MS);
+
 					docx.renderAsync(data, container, null, {
 						className: 'docx-wrapper',
 						inWrapper: true,
@@ -170,6 +179,7 @@
 						ignoreLastRenderedPageBreak: true,
 						experimental: false,
 					}).then(function () {
+						if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
 						if (loadingEl) { loadingEl.style.display = 'none'; }
 						injectParagraphIndices();
 					}).catch(function (err) {

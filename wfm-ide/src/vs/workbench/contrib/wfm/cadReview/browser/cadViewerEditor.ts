@@ -17,6 +17,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { generateUuid } from '../../../../../base/common/uuid.js';
 import { localize } from '../../../../../nls.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
+import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { ILogService } from '../../../../../platform/log/common/log.js';
 import { INotificationService, Severity } from '../../../../../platform/notification/common/notification.js';
 import { IStorageService } from '../../../../../platform/storage/common/storage.js';
@@ -29,7 +30,9 @@ import { IEditorOptions } from '../../../../../platform/editor/common/editor.js'
 import { IEditorGroup } from '../../../../services/editor/common/editorGroupsService.js';
 import { IWebviewElement, IWebviewService } from '../../../webview/browser/webview.js';
 import { asWebviewUri } from '../../../webview/common/webview.js';
-import { IWfmAgentClientService } from '../../common/wfmAgentClient.js';
+import { ChatViewId, IChatWidgetService } from '../../../chat/browser/chat.js';
+import { ChatAgentLocation } from '../../../chat/common/constants.js';
+import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import {
 	CAD_VIEWER_BYTE_LIMIT,
 	CAD_VIEWER_EDITOR_ID,
@@ -186,7 +189,8 @@ export class CadViewerEditor extends EditorPane {
 		@IStorageService storageService: IStorageService,
 		@IFileService private readonly fileService: IFileService,
 		@IWebviewService private readonly webviewService: IWebviewService,
-		@IWfmAgentClientService private readonly agentClient: IWfmAgentClientService,
+		@IViewsService private readonly viewsService: IViewsService,
+		@IChatWidgetService private readonly chatWidgetService: IChatWidgetService,
 		@INotificationService private readonly notificationService: INotificationService,
 		@ILogService private readonly logService: ILogService,
 	) {
@@ -482,14 +486,15 @@ export class CadViewerEditor extends EditorPane {
 			);
 
 		try {
-			await this.agentClient.submitExternalChat({
-				message,
-				originLabel: `viewer: ${fileName}`,
-				extras: {
-					dxfText,
-					dxfSourceUri: sourceUri,
-				},
-			});
+			await this.viewsService.openView(ChatViewId, true);
+			const widget = this.chatWidgetService.getWidgetsByLocations(ChatAgentLocation.Chat)[0]
+				?? this.chatWidgetService.lastFocusedWidget;
+			if (!widget) {
+				throw new Error('chat widget unavailable');
+			}
+			widget.focusInput();
+			widget.attachmentModel.addFile(URI.parse(sourceUri));
+			widget.setInput(message);
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);
 			this.notificationService.notify({
@@ -543,15 +548,30 @@ export class CadViewerEditor extends EditorPane {
 		super.dispose();
 	}
 
-	private handleSendSelection(
+	private async handleSendSelection(
 		entities: ReadonlyArray<{ handle: string; entityType: string; textContent?: string; layer: string; colorIndex?: number }>,
 		sourceUri: string,
 		fileName: string,
-	): void {
+	): Promise<void> {
 		if (!entities || entities.length === 0) {
 			return;
 		}
-		this.agentClient.attachCadSelection({ entities, sourceUri, fileName });
+		await this.viewsService.openView(ChatViewId, true);
+		const widget = this.chatWidgetService.getWidgetsByLocations(ChatAgentLocation.Chat)[0]
+			?? this.chatWidgetService.lastFocusedWidget;
+		if (!widget) {
+			return;
+		}
+		widget.focusInput();
+		widget.attachmentModel.addFile(URI.parse(sourceUri));
+		const summary = entities
+			.slice(0, 50)
+			.map(e => `- ${e.entityType} (handle=${e.handle}, layer=${e.layer}${e.textContent ? `, text="${e.textContent}"` : ''})`)
+			.join('\n');
+		widget.setInput(
+			`已选中 ${entities.length} 个 CAD 实体（来自 ${fileName}），请基于这些实体处理。\n\n` +
+			(entities.length > 50 ? `前 50 个实体：\n${summary}\n…（共 ${entities.length} 个）` : summary),
+		);
 	}
 
 	private async handleEditsApplied(dxfText: string, sourceUri: string): Promise<void> {
@@ -560,8 +580,7 @@ export class CadViewerEditor extends EditorPane {
 		}
 		try {
 			const uri = URI.parse(sourceUri);
-			const encoder = new TextEncoder();
-			await this.fileService.writeFile(uri, encoder.encode(dxfText));
+			await this.fileService.writeFile(uri, VSBuffer.fromString(dxfText));
 			this.logService.info(`${LOG_PREFIX} saved modified DXF: ${sourceUri}`);
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);

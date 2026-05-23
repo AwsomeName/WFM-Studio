@@ -1,6 +1,6 @@
 # Agent 与 Model 选择器改造方案
 
-> 日期: 2026-05-19
+> 日期: 2026-05-19；**状态更新**（2026-05-22）：后端已迁移至 Claude Code CLI + MCP 架构，Agent/Model 选择器方案需适配新架构。下方描述的 Agent 注册、Model 配置、Runner 改造等均基于旧 OpenAI Agents SDK 设计，需重新评估。
 > 状态: UI 已完成, Agent/Model 列表硬编码待后端打通
 
 ---
@@ -55,20 +55,22 @@ Model (对齐 `wfm-agents/.env` 实际配置: 阿里云 DashScope 兼容端点 `
 
 ### 后端 (wfm-agents)
 
-**Agent 注册 (4 个):**
+**Agent 注册 (MCP 工具集):**
 
-| Agent ID | 名称 | 用途 | 入口方式 |
-|---|---|---|---|
-| `wfm.router` | WFM 路由 | 通用对话 + 自动分发 | 默认入口 |
-| `text_to_cad` | 3D 模型生成 | 文本 → STEP 模型 | router handoff |
-| `cad_review` | CAD 审图 | DXF/DWG 审查 | router handoff |
-| `docx_review` | 文档审阅 | DOCX 审核 | router handoff |
+当前架构中不再有独立的 Agent 定义。Claude Code CLI 自主判断意图并调用对应的 MCP 工具：
+
+| 工具集 | 用途 |
+|---|---|
+| workspace_read / workspace_write | 文件读写 |
+| cad_file_read / cad_extract_* / cad_check_* | CAD 审图 |
+| cad_generate_step / cad_render / cad_export_dxf | 3D 建模 |
+| docx_read | DOCX 审阅 |
 
 **Model 配置:**
-- 默认模型: `glm-5.1` (经阿里云 DashScope `compatible-mode/v1`)
-- 配置方式: 仅环境变量 (`WFM_AGENT_MODEL`, `WFM_OPENAI_BASE_URL`, `WFM_OPENAI_API_KEY`)
-- 所有 Agent 共享同一个全局模型, 无 per-agent / per-request 选择
-- API 兼容: 任何 OpenAI-compatible 端点 (阿里云 DashScope / 智谱 / DeepSeek / OpenAI 等)
+- 默认模型: `sonnet`（Claude）
+- 配置方式: 仅环境变量 `WFM_CLAUDE_MODEL`
+- 所有工具共享同一个全局模型, 无 per-request 选择
+- Claude Code CLI 使用本地认证，无需 API Key
 
 **请求格式 (`POST /v1/chat/stream`):**
 ```json

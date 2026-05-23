@@ -1,6 +1,12 @@
 # DEV_AGENT_SDK_NATIVE — 对话后端迁移至 OpenAI Agents SDK · 完结记录
 
-> **状态：已完成（COMPLETED, 2026-05-14）**
+> ⚠️ **状态：已废弃（DEPRECATED, 2026-05-22）**
+>
+> 后端已从 OpenAI Agents SDK 进一步迁移至 **Claude Code CLI + MCP 工具服务器**。本文仅作历史记录保留。
+>
+> **当前架构**：`agent_v2/claude_runner.py`（子进程调用 `claude` CLI）+ `agent_v2/wfm_mcp_server.py`（MCP 工具服务器，`@mcp.tool()` 注册）。所有 `Agent()` 定义、`@function_tool`、`Runner.run_sync()`、`OpenAIProvider`、`WfmAgentContext` 均已移除。详见 [`wfm-agents/README.md`](../wfm-agents/README.md)。
+
+> 原状态：已完成（COMPLETED, 2026-05-14）
 >
 > 本文记录了从旧 `AgentGateway + EngineAdapter` 抽象迁移到 **OpenAI Agents SDK**（`agents` 包，`agent_v2/`）的完整过程与最终架构。所有迁移步骤均已执行、验证、合入 main。
 >

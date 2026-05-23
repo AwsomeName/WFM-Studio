@@ -34,9 +34,9 @@
 
 | 层 | 文件 | 改动内容 |
 |---|---|---|
-| **wfm-agents** | `cad/tools.py` | 新增 `cad_modify_colors` 工具 |
+| **wfm-agents** | `agent_v2/wfm_mcp_server.py` | 新增 `cad_modify_colors` MCP 工具（`@mcp.tool()`） |
 | **wfm-agents** | `cad/parser.py` | 新增 DXF 实体颜色修改函数 |
-| **wfm-agents** | `routes/chat.py` | SSE 事件中新增 `cad_edit` 类型 |
+| **wfm-agents** | `agent_v2/claude_runner.py` | NDJSON 事件中识别 `cad_modify_colors` 工具结果，映射为 `cad_edit` SSE 事件 |
 | **wfm-ide** | `common/wfmAgentClient.ts` | 回调接口新增 `onCadEdit` |
 | **wfm-ide** | `cadReview/browser/cadViewerMessages.ts` | 新增 IPC 消息类型 |
 | **wfm-ide** | `cadReview/browser/cadViewerEditor.ts` | 新增消息处理 + 文件保存 |

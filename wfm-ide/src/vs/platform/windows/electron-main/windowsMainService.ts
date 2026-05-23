@@ -1582,7 +1582,14 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 
 			cssModules: this.cssDevelopmentService.isEnabled ? await this.cssDevelopmentService.getCssModules() : undefined,
 
-			isSessionsWindow: isWorkspaceIdentifier(options.workspace) && isEqual(options.workspace.configPath, this.environmentMainService.agentSessionsWorkspace),
+			// WFM Studio: 强制为 false。sessions window 是 Microsoft 为 Copilot
+			// Agents 应用专门做的简化工作台（Sidebar/Customizations + Chat bar +
+			// "Files/Changes" AuxiliaryBar），与本项目"通用 IDE + 内嵌 AI 对话面板"
+			// 的产品形态不兼容；而且它不加载 workbench.common.main.ts，因此 wfm 的
+			// CAD viewer / DOCX viewer / HTML preview / 右键菜单全部失效。
+			// 即便用户磁盘上残留 agentSessionsWorkspace 也强制走普通 workbench.html。
+			isSessionsWindow: false,
+			// 原始: isSessionsWindow: isWorkspaceIdentifier(options.workspace) && isEqual(options.workspace.configPath, this.environmentMainService.agentSessionsWorkspace),
 		};
 
 		// New window

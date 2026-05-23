@@ -33,6 +33,7 @@ import { IFileService } from '../../platform/files/common/files.js';
 import { RemoteFileSystemProviderClient } from '../services/remote/common/remoteFileSystemProviderClient.js';
 import { ConfigurationCache } from '../services/configuration/common/configurationCache.js';
 import { ISignService } from '../../platform/sign/common/sign.js';
+import { IWfmClaudeService } from '../../platform/wfmClaude/common/wfmClaude.js';
 import { IProductService } from '../../platform/product/common/productService.js';
 import { IUriIdentityService } from '../../platform/uriIdentity/common/uriIdentity.js';
 import { UriIdentityService } from '../../platform/uriIdentity/common/uriIdentityService.js';
@@ -245,6 +246,10 @@ export class DesktopMain extends Disposable {
 		// Sign
 		const signService = ProxyChannel.toService<ISignService>(mainProcessService.getChannel('sign'));
 		serviceCollection.set(ISignService, signService);
+
+		// WFM Studio: Claude Code CLI bridge (talks to main-process WfmClaudeMainService)
+		const wfmClaudeService = ProxyChannel.toService<IWfmClaudeService>(mainProcessService.getChannel('wfmClaude'));
+		serviceCollection.set(IWfmClaudeService, wfmClaudeService);
 
 		// Files
 		const fileService = this._register(new FileService(logService));

@@ -1,10 +1,10 @@
 # ARCH_DOCX_REVIEW — Word 文档解析与审阅
 
-> **版本**：v0.3（2026-05-17）；**状态**：规格（实现前）
+> **版本**：v0.3（2026-05-17）；**状态更新**（2026-05-22）：工具已实现为 MCP 工具（`@mcp.tool()`），注册在 `wfm_mcp_server.py` 中，而非原设计的 `@function_tool`。整体架构（docx/parser + docx_read 工具 + ChatRequest.docx_path）保持不变。
 > **分支**：`feat/docx-review`
-> **关联**：[ARCH_AGENT_SDK_NATIVE.md](ARCH_AGENT_SDK_NATIVE.md)（对话后端正式规格）、[ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md)（CAD 审图工具化架构 v1.0，同类模式参考）、[ARCH_CAD_REVIEW.md](ARCH_CAD_REVIEW.md)（CAD 浏览 + 审图 v0.2，前端部分）、[TASK_SCENARIOS.md](TASK_SCENARIOS.md)、[PLAN.md](PLAN.md) Phase 7
-> **原则**：若本文与 ARCH_AGENT_SDK_NATIVE 冲突，以 ARCH_AGENT_SDK_NATIVE 为准。
-> **变更**：v0.1 基于 Recipe/ToolProvider 模式设计；v0.2 迁移至 Agent + `@function_tool` 模式；v0.3 同步 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) 的 route 层改造（`cad_file_path` 替代 `cad_extras`，`_resolve_cad_file_ref` 替代 `_extract_cad_review_extras`）。
+> **关联**：[ARCH_AGENT_SDK_NATIVE.md](ARCH_AGENT_SDK_NATIVE.md)（[已废弃] 旧对话后端规格）、[ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md)（CAD 审图工具化架构 v1.0，同类模式参考）、[ARCH_CAD_REVIEW.md](ARCH_CAD_REVIEW.md)（CAD 浏览 + 审图 v0.2，前端部分）、[TASK_SCENARIOS.md](TASK_SCENARIOS.md)、[PLAN.md](PLAN.md) Phase 7、[`wfm-agents/README.md`](../wfm-agents/README.md)（当前 Claude Code CLI + MCP 架构文档）
+> **原则**：若本文与 `wfm-agents/README.md` 冲突，以后者为准。
+> **变更**：v0.1 基于 Recipe/ToolProvider 模式设计；v0.2 迁移至 Agent + `@function_tool` 模式；v0.3 同步 route 层改造。**2026-05-22**：`@function_tool` 进一步迁移为 `@mcp.tool()`，工具注册在 `wfm_mcp_server.py` 中。
 
 ---
 
@@ -29,7 +29,7 @@
 - .docx 文件的解析与结构化提取（段落 + 表格）
 - 金额核对场景（Agent + Prompt）
 - 聊天面板附件按钮（前端）
-- `docx_read` 工具（LLM 可通过 `@function_tool` 调用）
+- `docx_read` 工具（LLM 可通过 MCP 工具调用）
 
 **不在 v0.1 范围**：
 
@@ -86,9 +86,10 @@ python-docx>=1.1    # .docx 解析（纯 Python，无系统依赖）
 |------|------|------|
 | `wfm_agents/docx/__init__.py` | export | 新增 |
 | `wfm_agents/docx/parser.py` | python-docx 解析 → 结构化 dict | 新增 |
-| `wfm_agents/agent_v2/tools.py` | 新增 `docx_read` `@function_tool` | 改动 |
-| `wfm_agents/agent_v2/agents.py` | 新增 `docx_review_agent` | 改动 |
-| `wfm_agents/agent_v2/runner.py` | `run_chat()` 新增 docx 分支 | 改动 |
+| `wfm_agents/agent_v2/wfm_mcp_server.py` | 新增 `docx_read` `@mcp.tool()` | 改动 |
+| `wfm_agents/agent_v2/claude_runner.py` | Claude Code CLI 子进程调用 | 替换 runner.py |
+| `wfm_agents/docx/__init__.py` | export | 新增 |
+| `wfm_agents/docx/parser.py` | python-docx 解析 → 结构化 dict | 新增 |
 | `wfm_agents/routes/chat.py` | ChatRequest 扩展 + docx 检测函数 | 改动 |
 
 ### 3.3 docx/parser.py — 文档解析器
@@ -146,58 +147,32 @@ def extract_amounts_from_table(table: dict) -> list[dict]:
 
 此函数识别常见金额模式（千分位、货币符号、百分比），供 Agent 构造 prompt 时使用，减少 LLM token 消耗。
 
-### 3.4 docx_review_agent
+### 3.4 docx_read MCP 工具
 
-在 `agent_v2/agents.py` 中新增 Agent 定义，与 `plain_chat_agent` / `cad_review_agent` 同模式：
+原设计的 `docx_review_agent`（`Agent` 类定义）已被 **Claude Code CLI + MCP 工具**取代。`docx_read` 工具注册在 `wfm_mcp_server.py` 中：
 
 ```python
-_SYSTEM_ZH_DOCX_REVIEW = (
-    "你是一个专业的标书/投标文件审阅助手。用户会提供一份 Word 文档的结构化内容。\n\n"
-    "你的任务是：\n"
-    "1. 找出文档中所有包含金额的表格\n"
-    "2. 逐行核对：数量 × 单价 = 合价（允许 ±0.01 的舍入误差）\n"
-    "3. 核对每个表格的小计是否等于各行合价之和\n"
-    "4. 核对总计是否等于各表小计之和\n"
-    "5. 如有文字段落中提及的总金额，与表格总计交叉比对\n\n"
-    "输出格式：\n"
-    "- 每个表格单独列出核对结果\n"
-    "- 正确的项标记 ✅\n"
-    "- 有差异的项标记 ⚠️ 或 ❌，并注明差异金额\n"
-    "- 末尾汇总：核对表格数、发现问题数、涉及差异总金额"
-)
-
-docx_review_agent: Agent[WfmAgentContext] = Agent(
-    name="wfm.docx_review",
-    instructions=_SYSTEM_ZH_DOCX_REVIEW,
-    tools=[docx_read],
-    tool_use_behavior="run_llm_again",
-)
+@mcp.tool()
+def docx_read(path: str, extract_tables_only: bool = False) -> str:
+    """读取并解析 .docx 文件，返回结构化 Markdown 内容。"""
+    from ..docx import parse_docx, format_docx_content
+    ...
 ```
 
-- `instructions`：金额核对 system prompt
-- `tools`：仅包含 `docx_read`（审阅时 LLM 可主动重新读取文档）
-- `tool_use_behavior="run_llm_again"`：工具调用后继续 LLM 推理（与现有 agents 一致）
+Claude 通过 `claude_runner.py` 中的 system prompt 获知 DOCX 审阅能力，自主调用 `docx_read` 工具。
 
-### 3.5 docx_read 工具 — @function_tool
+### 3.5 docx_read 工具 — MCP 实现
 
-在 `agent_v2/tools.py` 中新增 `@function_tool` 装饰的函数，与 `workspace_read` / `cad_inspect` 同模式：
+`docx_read` 已作为 MCP 工具实现在 `wfm_mcp_server.py` 中：
 
 ```python
-@function_tool
-def docx_read(
-    ctx: RunContextWrapper,
-    path: str,
-    extract_tables_only: bool = False,
-) -> str:
-    """读取并解析工作区内的 .docx 文件，提取段落和表格的完整内容。
+@mcp.tool()
+def docx_read(path: str, extract_tables_only: bool = False) -> str:
+    """读取并解析工作区内的 .docx 文件，提取段落和表格的完整内容。"""
+    from ..workspace import resolve_within, WorkspaceViolation
+    from ..docx import parse_docx, format_docx_content
 
-    Args:
-        path: 工作区相对路径，如 'docs/投标文件.docx'。
-        extract_tables_only: 仅提取表格（跳过段落），适用于金额核对场景。
-    """
-    from ..docx import parse_docx
-
-    root = ctx.context.workspace_root
+    root = os.environ["WFM_WORKSPACE_ROOT"]
     try:
         target = resolve_within(root, path)
     except WorkspaceViolation as exc:
@@ -209,63 +184,34 @@ def docx_read(
         return f"Error: 仅支持 .docx 文件: {path}"
 
     try:
-        content = parse_docx(target, extract_tables_only=extract_tables_only)
+        content = parse_docx(target)
     except Exception as exc:
         return f"Error: 文档解析失败: {exc}"
 
-    # 格式化为 LLM 可读的文本
-    return _format_docx_content(content)
+    if extract_tables_only:
+        content = {
+            "metadata": content["metadata"],
+            "paragraphs": [],
+            "tables": [{**t, "caption": None} for t in content["tables"]],
+            "stats": content["stats"],
+        }
+    return format_docx_content(content)
 ```
 
 **关键点**：
-- 不再使用 `ToolProvider` / `ToolSpec` / `ToolResult` 类，而是直接返回 `str`
+- workspace_root 通过 `WFM_WORKSPACE_ROOT` 环境变量获取（MCP 服务器启动时由 `claude_runner.py` 注入）
 - 错误信息以 `"Error: ..."` 前缀返回（与 `workspace_read` 等现有工具一致）
-- 工具通过 `ctx.context.workspace_root` 获取工作区路径（`WfmAgentContext`）
 
-**导出到 agents.py**：
+### 3.6 claude_runner.py 处理逻辑
 
-```python
-# agent_v2/tools.py 末尾
-docx_tools = [workspace_read, workspace_write, docx_read]
-```
-
-### 3.6 runner.py 分发逻辑
-
-`agent_v2/runner.py` 的 `run_chat()` 函数增加 `docx_extras` 参数和分发分支（CAD 审图已改为 `cad_file_path` 参数，详见 [ARCH_CAD_REVIEW_AGENT.md](ARCH_CAD_REVIEW_AGENT.md) §6）：
+原 `runner.py` 的分发逻辑已被 `claude_runner.py` 替代。Claude Code CLI 通过 `--system-prompt` 获知 DOCX 审阅能力，通过 `--mcp-config` 注册 MCP 工具服务器。route 层将 `docx_path` 检测到的文件信息注入 prompt，Claude 自主调用 `docx_read` 工具。
 
 ```python
-def run_chat(
-    *,
-    message: str,
-    workspace_root: str,
-    session_id: str | None = None,
-    cad_file_path: str | None = None,
-    docx_extras: dict[str, Any] | None = None,   # 新增
-) -> ChatResult:
-    run_config, max_turns = _build_run_config()
-    ctx = WfmAgentContext(workspace_root=workspace_root)
+# claude_runner.py 中的 system prompt 包含：
+# "When the user asks about a Word document, use docx_read."
 
-    if cad_file_path is not None:
-        agent = cad_review_agent
-        prompt = (
-            f"请审图，文件路径: {cad_file_path}\n"
-            f"用户要求: {message}"
-        )
-    elif docx_extras is not None:               # 新增
-        agent = docx_review_agent
-        prompt = _build_docx_prompt(docx_extras, message)
-    else:
-        agent = plain_chat_agent
-        prompt = message
-
-    result = Runner.run_sync(
-        starting_agent=agent,
-        input=prompt,
-        context=ctx,
-        run_config=run_config,
-        max_turns=max_turns,
-    )
-    # ... 后续处理
+# route 层 chat.py 检测到 docx_path 后，将文档路径信息注入 prompt
+# Claude 自主决定是否调用 docx_read MCP 工具
 ```
 
 `_build_docx_prompt()` 函数：

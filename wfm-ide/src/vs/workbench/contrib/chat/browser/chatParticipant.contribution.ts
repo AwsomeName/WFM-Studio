@@ -4,30 +4,23 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { coalesce, isNonEmptyArray } from '../../../../base/common/arrays.js';
-// [WFM] Codicon — unused after commenting out original Chat panel registration
-// import { Codicon } from '../../../../base/common/codicons.js';
+import { Codicon } from '../../../../base/common/codicons.js';
 import { toErrorMessage } from '../../../../base/common/errorMessage.js';
 import { Event } from '../../../../base/common/event.js';
 import { createCommandUri, MarkdownString } from '../../../../base/common/htmlContent.js';
-// [WFM] KeyCode, KeyMod — unused after commenting out original Chat panel registration
-// import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
+import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
 import { Disposable, DisposableMap, DisposableStore } from '../../../../base/common/lifecycle.js';
 import * as strings from '../../../../base/common/strings.js';
-import { localize } from '../../../../nls.js';
-// [WFM] localize2 — unused after commenting out original Chat panel registration
-import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
-// [WFM] ContextKeyExpr — unused after commenting out original Chat panel registration
+import { localize, localize2 } from '../../../../nls.js';
+import { ContextKeyExpr, IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { ExtensionIdentifier, IExtensionManifest } from '../../../../platform/extensions/common/extensions.js';
 import { SyncDescriptor } from '../../../../platform/instantiation/common/descriptors.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
-// [WFM] registerIcon — unused after commenting out original Chat panel registration
-// import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
-// [WFM] ViewPaneContainer — unused after commenting out original Chat panel registration
-// import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
+import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
+import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
-// [WFM] IViewContainersRegistry, IViewDescriptor, ViewContainer, ViewContainerLocation — unused after commenting out original Chat panel registration
-import { IViewsRegistry, Extensions as ViewExtensions } from '../../../common/views.js';
+import { IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainer, ViewContainerLocation, Extensions as ViewExtensions } from '../../../common/views.js';
 import { Extensions, IExtensionFeaturesRegistry, IExtensionFeatureTableRenderer, IRenderedData, IRowData, ITableData } from '../../../services/extensionManagement/common/extensionFeatures.js';
 import { isProposedApiEnabled } from '../../../services/extensions/common/extensions.js';
 import * as extensionsRegistry from '../../../services/extensions/common/extensionsRegistry.js';
@@ -37,57 +30,61 @@ import { IChatAgentData, IChatAgentService } from '../common/participants/chatAg
 import { ChatContextKeys } from '../common/actions/chatContextKeys.js';
 import { IRawChatParticipantContribution } from '../common/participants/chatParticipantContribTypes.js';
 import { ChatAgentLocation, ChatModeKind } from '../common/constants.js';
-import { ChatViewId } from './chat.js';
-// [WFM] ChatViewContainerId — unused after commenting out original Chat panel registration
-// [WFM] ChatViewPane — unused after commenting out original Chat panel registration
-// import { ChatViewPane } from './widgetHosts/viewPane/chatViewPane.js';
+import { ChatViewContainerId, ChatViewId } from './chat.js';
+import { ChatViewPane } from './widgetHosts/viewPane/chatViewPane.js';
 
-// --- Chat Container &  View Registration
+// --- Chat Container & View Registration -----------------------------------
 
-// const chatViewIcon = registerIcon('chat-view-icon', Codicon.chatSparkle, localize('chatViewIcon', 'View icon of the chat view.'));
+const chatViewIcon = registerIcon('chat-view-icon', Codicon.chatSparkle, localize('chatViewIcon', 'View icon of the chat view.'));
 
-// --- Original Chat panel registration commented out (WFM Studio replaces it) ---
-// const chatViewContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
-// 	id: ChatViewContainerId,
-// 	title: localize2('chat.viewContainer.label', "Chat"),
-// 	icon: chatViewIcon,
-// 	ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [ChatViewContainerId, { mergeViewWithContainerWhenSingleView: true }]),
-// 	storageId: ChatViewContainerId,
-// 	hideIfEmpty: true,
-// 	order: 1,
-// }, ViewContainerLocation.AuxiliaryBar, { isDefault: true, doNotRegisterOpenCommand: true });
-//
-// const chatViewDescriptor: IViewDescriptor = {
-// 	id: ChatViewId,
-// 	containerIcon: chatViewContainer.icon,
-// 	containerTitle: chatViewContainer.title.value,
-// 	singleViewPaneContainerTitle: chatViewContainer.title.value,
-// 	name: localize2('chat.viewContainer.label', "Chat"),
-// 	canToggleVisibility: false,
-// 	canMoveView: true,
-// 	openCommandActionDescriptor: {
-// 		id: ChatViewContainerId,
-// 		title: chatViewContainer.title,
-// 		mnemonicTitle: localize({ key: 'miToggleChat', comment: ['&& denotes a mnemonic'] }, "&&Chat"),
-// 		keybindings: {
-// 			primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyI,
-// 			mac: {
-// 				primary: KeyMod.CtrlCmd | KeyMod.WinCtrl | KeyCode.KeyI
-// 			}
-// 		},
-// 		order: 1
-// 	},
-// 	ctorDescriptor: new SyncDescriptor(ChatViewPane),
-// 	when: ContextKeyExpr.or(
-// 		ContextKeyExpr.and(
-// 			ChatContextKeys.Setup.hidden.negate(),
-// 			ChatContextKeys.Setup.disabledInWorkspace.negate(),
-// 		),
-// 		ChatContextKeys.panelParticipantRegistered,
-// 		ChatContextKeys.extensionInvalid
-// 	)
-// };
-// Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([chatViewDescriptor], chatViewContainer);
+// WFM Studio: we keep the upstream ChatViewContainer & ChatViewId registration
+// but route requests to the local Claude Code CLI agent (see
+// contrib/wfm/electron-browser/wfmClaudeAgent.contribution.ts).
+const chatViewContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
+	id: ChatViewContainerId,
+	title: localize2('chat.viewContainer.label', "Chat"),
+	icon: chatViewIcon,
+	ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [ChatViewContainerId, { mergeViewWithContainerWhenSingleView: true }]),
+	storageId: ChatViewContainerId,
+	hideIfEmpty: true,
+	order: 1,
+}, ViewContainerLocation.AuxiliaryBar, { isDefault: true, doNotRegisterOpenCommand: true });
+
+const chatViewDescriptor: IViewDescriptor = {
+	id: ChatViewId,
+	containerIcon: chatViewContainer.icon,
+	containerTitle: chatViewContainer.title.value,
+	singleViewPaneContainerTitle: chatViewContainer.title.value,
+	name: localize2('chat.viewContainer.label', "Chat"),
+	canToggleVisibility: false,
+	canMoveView: true,
+	openCommandActionDescriptor: {
+		id: ChatViewContainerId,
+		title: chatViewContainer.title,
+		mnemonicTitle: localize({ key: 'miToggleChat', comment: ['&& denotes a mnemonic'] }, "&&Chat"),
+		keybindings: {
+			primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyI,
+			mac: {
+				primary: KeyMod.CtrlCmd | KeyMod.WinCtrl | KeyCode.KeyI
+			}
+		},
+		order: 1
+	},
+	ctorDescriptor: new SyncDescriptor(ChatViewPane),
+	// WFM Studio: the local Claude agent forces these context keys true on
+	// startup (see wfmClaudeAgent.contribution.ts._bypassChatSetupGates), so
+	// the `when` collapses to "always visible" while we still keep the original
+	// expression so a future upstream merge stays semantically aligned.
+	when: ContextKeyExpr.or(
+		ContextKeyExpr.and(
+			ChatContextKeys.Setup.hidden.negate(),
+			ChatContextKeys.Setup.disabledInWorkspace.negate(),
+		),
+		ChatContextKeys.panelParticipantRegistered,
+		ChatContextKeys.extensionInvalid
+	)
+};
+Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([chatViewDescriptor], chatViewContainer);
 
 const chatParticipantExtensionPoint = extensionsRegistry.ExtensionsRegistry.registerExtensionPoint<IRawChatParticipantContribution[]>({
 	extensionPoint: 'chatParticipants',

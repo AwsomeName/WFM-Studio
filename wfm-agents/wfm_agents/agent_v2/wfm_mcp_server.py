@@ -111,14 +111,96 @@ def cad_file_read(path: str) -> str:
 
 @mcp.tool()
 def cad_extract_texts(path: str, layer: str | None = None) -> str:
-    """Extract text entities (TEXT + MTEXT) from a CAD file."""
+    """Extract text entities (TEXT + MTEXT) from a CAD file.
+    Returns a compact summary.  For the full list use to_file to write
+    results to a JSON file and read it with workspace_read."""
     try:
         resolved = _resolve_path(path)
         from ..cad.parser import summarize_dxf_texts  # noqa: PLC0415
 
-        return json.dumps(summarize_dxf_texts(resolved, layer=layer), ensure_ascii=False)
+        result = summarize_dxf_texts(resolved, layer=layer)
+        count = result.get("count", 0)
+        texts = result.get("texts", [])
+        preview = texts[:10]
+        return json.dumps(
+            {
+                "file": result.get("file"),
+                "count": count,
+                "preview": preview,
+                "hint": f"{count} text entities found. First 10 shown."
+                f" Use to_file='path.json' to export all." if count > 10 else "",
+            },
+            ensure_ascii=False,
+        )
     except Exception as exc:
         return f"Error: {exc}"
+
+
+@mcp.tool()
+def cad_translate_save(
+    source_path: str,
+    target_lang: str,
+    translations: dict[str, str],
+    output_path: str,
+) -> str:
+    """Translate texts in a DXF file and save as a new file.
+
+    Args:
+        source_path: Input DXF file path (workspace-relative or absolute).
+        target_lang: Target language name (e.g. "Russian", "俄语").
+        translations: Map of original text -> translated text.
+        output_path: Where to save the translated DXF (workspace-relative).
+    """
+    from ..workspace import resolve_within, WorkspaceViolation  # noqa: PLC0415
+
+    root = _root()
+    try:
+        src = Path(_resolve_path(source_path))
+        dst = resolve_within(root, output_path)
+    except (WorkspaceViolation, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+    if src.suffix.lower() != ".dxf":
+        return f"Error: 仅支持 DXF 文件，收到 {src.suffix}"
+
+    try:
+        import ezdxf  # noqa: PLC0415
+
+        doc = ezdxf.readfile(str(src))
+    except Exception as exc:
+        return f"Error: DXF 文件读取失败: {exc}"
+
+    translated = 0
+    missed: list[str] = []
+
+    for entity in doc.modelspace():
+        if entity.dxftype() not in {"TEXT", "MTEXT"}:
+            continue
+        old = ""
+        if entity.dxftype() == "MTEXT":
+            old = (entity.text or "").strip()
+        else:
+            old = (entity.dxf.text or "").strip()
+        if not old:
+            continue
+        new = translations.get(old)
+        if new is None:
+            missed.append(old[:80])
+            continue
+        if entity.dxftype() == "MTEXT":
+            entity.text = new
+        else:
+            entity.dxf.text = new
+        translated += 1
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    doc.saveas(str(dst))
+
+    rel = dst.relative_to(root) if dst.is_relative_to(root) else str(dst)
+    msg = f"翻译完成: {translated} 条文本已替换为{target_lang}，保存到 {rel}"
+    if missed:
+        msg += f"\n警告: {len(missed)} 条文本未在 translations 中找到匹配"
+    return msg
 
 
 @mcp.tool()

@@ -92,6 +92,7 @@ import '../platform/extensionManagement/electron-browser/extensionsProfileScanne
 import '../platform/sandbox/electron-browser/sandboxHelperService.js';
 import '../platform/webContentExtractor/electron-browser/webContentExtractorService.js';
 import '../platform/agentHost/electron-browser/agentHostService.js';
+import '../platform/agentHost/browser/nullRemoteAgentHostService.js';
 import './services/browserView/electron-browser/playwrightWorkbenchService.js';
 import './services/process/electron-browser/processService.js';
 import './services/power/electron-browser/powerService.js';
@@ -179,6 +180,9 @@ import './contrib/remoteTunnel/electron-browser/remoteTunnel.contribution.js';
 
 // Chat
 import './contrib/chat/electron-browser/chat.contribution.js';
+
+// WFM Studio: Claude Code CLI chat agent (overrides default chat participant)
+import './contrib/wfm/electron-browser/wfmClaudeAgent.contribution.js';
 
 // Encryption
 import './contrib/encryption/electron-browser/encryption.contribution.js';

@@ -12,7 +12,7 @@
 WFM-Studio/
 ├── wfm-ide/         vscode fork（git subtree，定制全部在 contrib/wfm/）
 ├── wfm-agents/      FastAPI + Agent 后端（uv + Python 3.11+）
-├── third_party/     vendor 的开源组件（agenticx / maf / crewai / anthropic-sdk-python）
+├── third_party/     vendor 的开源组件（text-to-cad / libredwg / openai-agents-python 等）
 ├── scripts/         一键开发启动器（dev.sh / dev-minimal.sh / dev-stop.sh / wfm-up.sh）
 ├── docs/            产品 / 架构 / 升级文档
 └── .wfm-dev/        运行期工件（log、pid，已 gitignore）
@@ -26,6 +26,7 @@ WFM-Studio/
 | [`docs/PLAN.md`](docs/PLAN.md) | 实施计划与里程碑 |
 | [`docs/TASK_SCENARIOS.md`](docs/TASK_SCENARIOS.md) | 用户故事 |
 | [`docs/ARCH_AGENT_GATEWAY.md`](docs/ARCH_AGENT_GATEWAY.md) | [已废弃] 旧 Agent 网关架构 |
+| [`docs/ARCH_AGENT_SDK_NATIVE.md`](docs/ARCH_AGENT_SDK_NATIVE.md) | [已废弃] OpenAI Agents SDK 架构 |
 | [`docs/ARCH_CAD_REVIEW.md`](docs/ARCH_CAD_REVIEW.md) | CAD 审图架构 |
 | [`docs/UPSTREAM_PATCHES.md`](docs/UPSTREAM_PATCHES.md) | vscode fork 改动登记 |
 | [`docs/VSCODE_UPSTREAM.md`](docs/VSCODE_UPSTREAM.md) | vscode 升级流程 |
@@ -35,11 +36,10 @@ WFM-Studio/
 ## 快速启动
 
 ```bash
-# 1) 配置后端 LLM secret（首次必做）
+# 1) 配置后端（Claude Code 默认即用，无需额外配置）
 cp wfm-agents/.env.example wfm-agents/.env
-# 然后编辑 wfm-agents/.env 填入 WFM_OPENAI_API_KEY 等。
-# 默认走 DashScope (阿里云百炼) + glm-5.1；要切 DeepSeek / 官方 OpenAI / 其它兼容上游，
-# 改 WFM_OPENAI_BASE_URL 与 WFM_OPENAI_MODEL 即可，无需改代码。
+# 按需填写环境变量。Claude Code CLI 使用本地认证，无需 API Key。
+# 可选：设置 WFM_CLAUDE_MODEL 切换模型（默认 sonnet）。
 
 # 2) 一键最小闭环：后端 + IDE watch + 工作台
 ./scripts/dev-minimal.sh
@@ -51,7 +51,6 @@ cp wfm-agents/.env.example wfm-agents/.env
 ./scripts/dev-stop.sh
 ```
 
-**Agent 后端**：基于 OpenAI Agents SDK（`agent_v2/`），默认走 DashScope + GLM-5.1（OpenAI Chat Completions 兼容）。
-`engine` / `mode` 字段已废弃（接受但忽略），历史原因保留。详见 [`docs/WHY_AGENTS_SDK.md`](docs/WHY_AGENTS_SDK.md)。
+**Agent 后端**：基于 **Claude Code CLI + MCP 工具服务器**（`agent_v2/`），通过子进程调用 `claude` 命令行工具，使用 MCP 协议暴露 workspace/CAD/DOCX 操作能力。`engine` / `mode` 字段已废弃（接受但忽略）。详见 [`wfm-agents/README.md`](wfm-agents/README.md)。
 
 详细开发流程见各子目录 README 与 `docs/PLAN.md` §8.3。

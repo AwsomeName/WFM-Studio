@@ -292,11 +292,11 @@ export class CopilotAgent extends Disposable implements IAgent {
 
 		const sessionId = config?.session ? AgentSession.id(config.session) : generateUuid();
 		const sessionUri = AgentSession.uri(this.id, sessionId);
+		const workingDirectory = await this._resolveSessionWorkingDirectory(config, sessionId);
 		const shellManager = this._instantiationService.createInstance(ShellManager, sessionUri);
 		const activeClient = this._activeClients.get(sessionUri);
 		const snapshot = activeClient ? await activeClient.snapshot() : undefined;
-		const sessionConfig = this._buildSessionConfig(snapshot, shellManager);
-		const workingDirectory = await this._resolveSessionWorkingDirectory(config, sessionId);
+		const sessionConfig = this._buildSessionConfig(snapshot, shellManager, workingDirectory);
 
 		const factory: SessionWrapperFactory = async callbacks => {
 			const raw = await client.createSession({
@@ -620,7 +620,7 @@ export class CopilotAgent extends Disposable implements IAgent {
 	 * session's permission/hook callbacks, so it can be called lazily
 	 * inside the {@link SessionWrapperFactory}.
 	 */
-	private _buildSessionConfig(snapshot: IActiveClientSnapshot | undefined, shellManager: ShellManager) {
+	private _buildSessionConfig(snapshot: IActiveClientSnapshot | undefined, shellManager: ShellManager, workingDirectory?: URI) {
 		const shellTools = createShellTools(shellManager, this._terminalManager, this._logService);
 		const plugins = snapshot?.plugins ?? [];
 
@@ -630,11 +630,34 @@ export class CopilotAgent extends Disposable implements IAgent {
 				onPermissionRequest: callbacks.onPermissionRequest,
 				onUserInputRequest: callbacks.onUserInputRequest,
 				hooks: toSdkHooks(plugins.flatMap(p => p.hooks), callbacks.hooks),
-				mcpServers: toSdkMcpServers(plugins.flatMap(p => p.mcpServers)),
+				mcpServers: {
+					...toSdkMcpServers(plugins.flatMap(p => p.mcpServers)),
+					...this._buildWfmMcpServer(workingDirectory),
+				},
 				customAgents,
 				skillDirectories: toSdkSkillDirectories(plugins.flatMap(p => p.skills)),
 				tools: [...shellTools, ...callbacks.clientTools],
 			};
+		};
+	}
+
+	/**
+	 * Builds the WFM MCP server config for injection into Copilot sessions.
+	 * Provides workspace, CAD, and DOCX tools via stdio transport.
+	 */
+	private _buildWfmMcpServer(workingDirectory?: URI): Record<string, import('@github/copilot-sdk').MCPServerConfig> {
+		if (!workingDirectory) {
+			return {};
+		}
+		const pythonPath = process.env['WFM_PYTHON_PATH'] || 'python3';
+		return {
+			'wfm-tools': {
+				type: 'local',
+				command: pythonPath,
+				args: ['-m', 'wfm_agents.agent_v2.wfm_mcp_server'],
+				tools: ['*'],
+				env: { WFM_WORKSPACE_ROOT: workingDirectory.fsPath },
+			},
 		};
 	}
 
@@ -652,7 +675,7 @@ export class CopilotAgent extends Disposable implements IAgent {
 		});
 		const workingDirectory = typeof sessionMetadata?.context?.cwd === 'string' ? URI.file(sessionMetadata.context.cwd) : storedMetadata.workingDirectory;
 		const shellManager = this._instantiationService.createInstance(ShellManager, sessionUri);
-		const sessionConfig = this._buildSessionConfig(snapshot, shellManager);
+		const sessionConfig = this._buildSessionConfig(snapshot, shellManager, workingDirectory);
 
 		const factory: SessionWrapperFactory = async callbacks => {
 			const config = await sessionConfig(callbacks);

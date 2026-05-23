@@ -27,7 +27,9 @@ import { IEditorOptions } from '../../../../../platform/editor/common/editor.js'
 import { IEditorGroup } from '../../../../services/editor/common/editorGroupsService.js';
 import { IWebviewElement, IWebviewService } from '../../../webview/browser/webview.js';
 import { asWebviewUri } from '../../../webview/common/webview.js';
-import { IWfmAgentClientService } from '../../common/wfmAgentClient.js';
+import { ChatViewId, IChatWidgetService } from '../../../chat/browser/chat.js';
+import { ChatAgentLocation } from '../../../chat/common/constants.js';
+import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import {
 		DOCX_VIEWER_BYTE_LIMIT,
 		DOCX_VIEWER_EDITOR_ID,
@@ -36,6 +38,7 @@ import {
 import { DocxViewerEditorInput } from './docxViewerEditorInput.js';
 import { DocxWebviewToMainMessage, IDocxLoadMessage } from './docxViewerMessages.js';
 import { createDocumentReference } from './docxSelectionHelper.js';
+import { webviewGenericCspSource } from '../../../webview/common/webview.js';
 
 const $ = dom.$;
 const LOG_PREFIX = '[wfm-docx-viewer]';
@@ -48,13 +51,14 @@ const MEDIA_ROOT = FileAccess.asFileUri(
 interface IViewerHtmlArgs {
 	readonly nonce: string;
 	readonly cspSource: string;
+	readonly jsZipUri: string;
 	readonly docxPreviewUri: string;
 	readonly viewerJsUri: string;
 	readonly viewerCssUri: string;
 }
 
 function buildViewerHtml(args: IViewerHtmlArgs): string {
-	const { nonce, cspSource, docxPreviewUri, viewerJsUri, viewerCssUri } = args;
+	const { nonce, cspSource, jsZipUri, docxPreviewUri, viewerJsUri, viewerCssUri } = args;
 
 	const csp = [
 		`default-src 'none'`,
@@ -81,6 +85,7 @@ function buildViewerHtml(args: IViewerHtmlArgs): string {
 	<button id="wfm-send-selection">发送到对话</button>
 </div>
 <div id="wfm-docx-error"></div>
+<script nonce="${nonce}" src="${jsZipUri}"></script>
 <script nonce="${nonce}" src="${docxPreviewUri}"></script>
 <script nonce="${nonce}" src="${viewerJsUri}"></script>
 </body>
@@ -105,7 +110,8 @@ export class DocxViewerEditor extends EditorPane {
 		@IStorageService storageService: IStorageService,
 		@IFileService private readonly fileService: IFileService,
 		@IWebviewService private readonly webviewService: IWebviewService,
-		@IWfmAgentClientService private readonly agentClient: IWfmAgentClientService,
+		@IViewsService private readonly viewsService: IViewsService,
+		@IChatWidgetService private readonly chatWidgetService: IChatWidgetService,
 		@INotificationService private readonly notificationService: INotificationService,
 		@ILogService private readonly logService: ILogService,
 	) {
@@ -201,7 +207,8 @@ export class DocxViewerEditor extends EditorPane {
 		const mediaUri = (file: string) => asWebviewUri(joinPath(MEDIA_ROOT, file)).toString(true);
 		const html = buildViewerHtml({
 			nonce,
-			cspSource: 'https://*.vscode-cdn.net',
+			cspSource: webviewGenericCspSource,
+			jsZipUri: mediaUri('jszip.min.js'),
 			docxPreviewUri: mediaUri('docx-preview.min.js'),
 			viewerJsUri: mediaUri('docxViewer.js'),
 			viewerCssUri: mediaUri('docxViewer.css'),
@@ -250,7 +257,7 @@ export class DocxViewerEditor extends EditorPane {
 		}
 	}
 
-	private handleSelectionToChat(startPara: number, endPara: number, selectedText: string): void {
+	private async handleSelectionToChat(startPara: number, endPara: number, selectedText: string): Promise<void> {
 		if (!this.currentResource || !this.currentFileName) {
 			this.logService.warn(`${LOG_PREFIX} selectionToChat but no current file`);
 			return;
@@ -260,7 +267,14 @@ export class DocxViewerEditor extends EditorPane {
 			this.currentResource,
 			{ startPara, endPara, selectedText },
 		);
-		this.agentClient.attachDocSelection(ref);
+		await this.viewsService.openView(ChatViewId, true);
+		const widget = this.chatWidgetService.getWidgetsByLocations(ChatAgentLocation.Chat)[0]
+			?? this.chatWidgetService.lastFocusedWidget;
+		if (!widget) {
+			return;
+		}
+		widget.focusInput();
+		widget.setInput(`[文档: ${ref.displayLabel}]\n${ref.selectedText}`);
 	}
 
 	private showStatus(message: string, isError: boolean): void {

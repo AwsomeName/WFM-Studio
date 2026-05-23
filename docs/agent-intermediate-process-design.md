@@ -2,7 +2,7 @@
 
 ## 背景
 
-当前 Agent 框架已有 SSE 流式管道，支持 `tool_call_started`、`tool_call_done`、`agent_handoff`、`text_delta` 等事件。
+当前 Agent 框架已有 SSE 流式管道，支持 `tool_call_started`、`tool_call_done`、`text_delta`、`thinking_delta` 等事件（由 `claude_runner.py` 从 Claude Code CLI 的 NDJSON 输出映射而来）。
 但工具步骤只显示名称和状态（旋转→✓），不显示输入参数和输出结果，导致用户无法感知 Agent 的实际操作内容。
 
 ---
@@ -16,8 +16,8 @@
 
 | 层 | 文件 | 改动 |
 |---|---|---|
-| 后端 | `agent_v2/runner.py` | 从 SDK 事件中提取 `raw_item.arguments` 和 `item.output`，加入 SSE 帧 |
-| 传输 | SSE JSON | `tool_call_started` 新增 `args` 字段；`tool_call_done` 新增 `summary` 字段 |
+| 后端 | `agent_v2/claude_runner.py` | 从 NDJSON 事件中提取工具 `input` 和 `content`，加入 SSE 帧 |
+| 传输 | SSE JSON | `tool_call_started` 已含 `args` 字段；`tool_call_done` 已含 `summary` 字段 |
 | 前端接口 | `wfmAgentClient.ts` | `onToolCallStarted` 增加 `args` 参数；`onToolCallDone` 增加 `summary` 参数 |
 | 前端服务 | `wfmAgentClientService.ts` | `dispatchSseEvent` 解析并传递新字段 |
 | 前端 UI | `wfmChatViewPane.ts` | `addToolStep` / `completeToolStep` 渲染参数和摘要文本 |

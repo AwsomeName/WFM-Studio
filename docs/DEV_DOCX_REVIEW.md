@@ -3,8 +3,8 @@
 > **用途**：把 [`ARCH_DOCX_REVIEW.md`](ARCH_DOCX_REVIEW.md) 里的设计拆成可独立 merge 的 4 个阶段，给 AI / 工程师按步执行。
 > **规格来源**：[`ARCH_DOCX_REVIEW.md`](ARCH_DOCX_REVIEW.md)（数据模型 / 工具签名 / 路由逻辑 / 错误码）。
 > **基本原则**：若本文与 ARCH 冲突，以 ARCH 为准；发现 ARCH 缺漏先补 ARCH，再改代码。
-> **关联**：[`ARCH_AGENT_SDK_NATIVE.md`](ARCH_AGENT_SDK_NATIVE.md)（对话后端正式规格）、[`DEV_AGENT_SDK_NATIVE.md`](DEV_AGENT_SDK_NATIVE.md)（已完成的 agent_v2 实现）。
-> **架构基线**：后端已迁移至 OpenAI Agents SDK（`agent_v2/`），使用 `Agent[WfmAgentContext]` + `@function_tool` 模式。旧的 `Recipe` / `ToolProvider` / `_providers_for_recipe()` 已废弃。
+> **关联**：[`ARCH_AGENT_SDK_NATIVE.md`](ARCH_AGENT_SDK_NATIVE.md)（[已废弃] 旧对话后端规格）、[`wfm-agents/README.md`](../wfm-agents/README.md)（当前 Claude Code CLI + MCP 架构文档）。
+> **架构基线**：后端已迁移至 **Claude Code CLI + MCP 工具服务器**（`agent_v2/claude_runner.py` + `wfm_mcp_server.py`），使用 `@mcp.tool()` 注册工具。旧的 `Agent[WfmAgentContext]` + `@function_tool` 模式已废弃。
 
 ---
 
@@ -16,8 +16,9 @@
 
 ```
 agent_v2/
-├── context.py     # WfmAgentContext(workspace_root)
-├── agents.py      # plain_chat_agent / cad_review_agent → Agent[WfmAgentContext]
+├── claude_runner.py   # Claude Code CLI 子进程调用 + NDJSON → SSE 映射
+├── wfm_mcp_server.py  # MCP 工具服务器（workspace + CAD + DOCX 工具）
+└── sse.py             # SSE 事件编码
 ├── tools.py       # @function_tool: workspace_read, workspace_write, cad_*
 ├── runner.py      # run_chat() / run_chat_stream() → Runner.run_sync / Runner.run_streamed
 ├── sse.py         # SSE event constants + encode_sse()

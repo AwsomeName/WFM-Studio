@@ -9,11 +9,11 @@
 >
 > **状态**：本文档描述 **Phase 3（L1–L3）** 目标设计；实现进度以代码与 `ARCH_CAD_REVIEW.md` 为准。
 >
-> **2026-05-14 增量**：后端实现路径换骨——`/v1/chat` 不再过 AgentGateway / EngineAdapter，而是由 `agent/runner.py` 直连 `openai-python`。**本文设计意图不变**，只是落地组件名调整：
+> **2026-05-14 增量**：后端实现路径换骨——`/v1/chat` 不再过 AgentGateway / EngineAdapter，而是由 **Claude Code CLI + MCP 工具服务器**处理（`agent_v2/claude_runner.py` + `wfm_mcp_server.py`）。**本文设计意图不变**，只是落地组件名调整：
 > - 「选区 ezdxf 摘要」仍在 `wfm-agents/wfm_agents/cad/parser.py`
-> - 「cad_review_prompt + 多模态」从 `cad/recipes.py` 迁到 `agent/recipes/cad_review.py`（`CadReviewRecipe`）
-> - 「LLM 调用 + 流式」由新 runner 统一负责（`responses.parse` / `responses.stream`）
-> - 数据流图（§4）中 "POST /v1/chat" → "cad_review_prompt + 多模态" → "LLM" 三个节点对应到新规格的 §8
+> - 「CAD 工具调用」通过 MCP 工具（`@mcp.tool()`）注册在 `wfm_mcp_server.py`
+> - 「LLM 调用 + 流式」由 `claude_runner.py` 通过 Claude Code CLI 子进程完成
+> - 数据流图（§4）中 "POST /v1/chat" → "Claude Code CLI" → "MCP 工具" 对应到新架构
 
 ---
 

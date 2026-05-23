@@ -1,5 +1,11 @@
 # Why We Migrated to OpenAI Agents SDK
 
+> ⚠️ **状态：已废弃（DEPRECATED, 2026-05-22）**
+>
+> 后端已从 OpenAI Agents SDK 迁移至 **Claude Code CLI + MCP 工具服务器**。本文仅作历史记录保留。
+>
+> 当前架构：`agent_v2/claude_runner.py` 通过子进程调用 `claude` CLI，工具通过 MCP 协议暴露（`wfm_mcp_server.py`）。所有 Agent 定义、Handoff 逻辑、`@function_tool`、`OpenAIProvider` 已移除。详见 [`wfm-agents/README.md`](../wfm-agents/README.md)。
+
 ## The Problem
 
 WFM Studio's original agent layer (`wfm_agents/agent/`) was a hand-rolled

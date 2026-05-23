@@ -139,6 +139,8 @@ import { NativeMcpDiscoveryHelperService } from '../../platform/mcp/node/nativeM
 import { IMcpGatewayService, McpGatewayChannelName } from '../../platform/mcp/common/mcpGateway.js';
 import { McpGatewayService } from '../../platform/mcp/node/mcpGatewayService.js';
 import { McpGatewayChannel } from '../../platform/mcp/node/mcpGatewayChannel.js';
+import { IWfmClaudeService } from '../../platform/wfmClaude/common/wfmClaude.js';
+import { WfmClaudeMainService } from '../../platform/wfmClaude/electron-main/wfmClaudeMainService.js';
 import { IWebContentExtractorService } from '../../platform/webContentExtractor/common/webContentExtractor.js';
 import { NativeWebContentExtractorService } from '../../platform/webContentExtractor/electron-main/webContentExtractorService.js';
 import { AgentNetworkFilterService, IAgentNetworkFilterService } from '../../platform/networkFilter/common/networkFilterService.js';
@@ -1191,6 +1193,9 @@ export class CodeApplication extends Disposable {
 		services.set(INativeMcpDiscoveryHelperService, new SyncDescriptor(NativeMcpDiscoveryHelperService));
 		services.set(IMcpGatewayService, new SyncDescriptor(McpGatewayService));
 
+		// WFM Studio: Claude Code CLI bridge (spawns `claude` subprocess for chat agent)
+		services.set(IWfmClaudeService, new SyncDescriptor(WfmClaudeMainService, undefined, false /* proxied to renderer */));
+
 		// Dev Only: CSS service (for ESM)
 		services.set(ICSSDevelopmentService, new SyncDescriptor(CSSDevelopmentService, undefined, true));
 
@@ -1335,6 +1340,10 @@ export class CodeApplication extends Disposable {
 		const mcpGatewayChannel = this._register(new McpGatewayChannel(mainProcessElectronServer, accessor.get(IMcpGatewayService), accessor.get(ILoggerMainService)));
 		mainProcessElectronServer.registerChannel(McpGatewayChannelName, mcpGatewayChannel);
 
+		// WFM Studio: Claude Code CLI bridge (renderer → main process spawn)
+		const wfmClaudeChannel = ProxyChannel.fromService(accessor.get(IWfmClaudeService), disposables);
+		mainProcessElectronServer.registerChannel('wfmClaude', wfmClaudeChannel);
+
 		// Logger
 		const loggerChannel = new LoggerChannel(accessor.get(ILoggerMainService),);
 		mainProcessElectronServer.registerChannel('logger', loggerChannel);
@@ -1360,14 +1369,20 @@ export class CodeApplication extends Disposable {
 		const context = isLaunchedFromCli(process.env) ? OpenContext.CLI : OpenContext.DESKTOP;
 		const args = this.environmentMainService.args;
 
-		// Handle agents window first based on context
-		if ((process as INodeProcess).isEmbeddedApp || (args['agents'] && this.productService.quality !== 'stable')) {
-			return windowsMainService.openAgentsWindow({
-				context,
-				cli: args,
-				initialStartup: true
-			});
-		}
+		// WFM Studio: 永远不进 Microsoft Copilot Agents Sessions Window —— 该子
+		// 窗口加载 vs/sessions/electron-browser/sessions.html，UI 是 Sidebar +
+		// Chat bar + "Files/Changes" AuxiliaryBar，不加载 workbench.common.main.ts，
+		// 也就不会注册 wfm 的 CAD / DOCX / HTML 编辑器与 Explorer 右键菜单。
+		// 即使用户带 --agents 参数或环境被 isEmbeddedApp 标了 true，也强制走普通
+		// workbench。
+		// 原始判断：
+		// if ((process as INodeProcess).isEmbeddedApp || (args['agents'] && this.productService.quality !== 'stable')) {
+		// 	return windowsMainService.openAgentsWindow({
+		// 		context,
+		// 		cli: args,
+		// 		initialStartup: true
+		// 	});
+		// }
 
 		// Then check for windows from protocol links to open
 		if (initialProtocolUrls) {
