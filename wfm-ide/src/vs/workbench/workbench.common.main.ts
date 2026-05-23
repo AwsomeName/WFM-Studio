@@ -219,7 +219,9 @@ import './contrib/wfm/browser/wfm.contribution.js';
 import './contrib/wfm/cadReview/browser/cadReview.contribution.js';
 import './contrib/wfm/htmlPreview/browser/htmlPreview.contribution.js';
 import './contrib/wfm/docxViewer/browser/docxViewer.contribution.js';
+import './contrib/wfm/stepViewer/browser/stepViewer.contribution.js';
 import './contrib/wfm/settings/browser/wfmSettings.contribution.js';
+import './contrib/wfm/knowledgeBase/browser/kbSidebar.contribution.js';
 
 // Interactive
 import './contrib/interactive/browser/interactive.contribution.js';

@@ -49,6 +49,7 @@
 	const tipEl = $$('wfm-cad-tip');
 	const reviewBtn = /** @type {HTMLButtonElement} */ ($$('wfm-cad-review'));
 	const zoomFitBtn = /** @type {HTMLButtonElement} */ ($$('wfm-cad-zoom-fit'));
+	const refreshBtn = /** @type {HTMLButtonElement} */ ($$('wfm-cad-refresh'));
 	const layersBtn = /** @type {HTMLButtonElement} */ ($$('wfm-cad-toggle-layers'));
 	const modeBtn = /** @type {HTMLButtonElement} */ ($$('wfm-cad-toggle-mode'));
 
@@ -118,6 +119,9 @@
 		}
 		if (zoomFitBtn) {
 			zoomFitBtn.disabled = isBusy || !viewerReady;
+		}
+		if (refreshBtn) {
+			refreshBtn.disabled = isBusy;
 		}
 		if (layersBtn) {
 			layersBtn.disabled = isBusy || !viewerReady;
@@ -290,10 +294,10 @@
 		applyTheme(initialIsDark);
 
 		// 总兜底：所有内部 await（vendor bundle 准备就绪、prefetch fonts.json、
-		// rewriteWorkersToBlob 各 worker 拉取）加起来正常 ≤ 几秒，最坏 ≤ 30s。
-		// 超过 60s 基本可以判定是 webview 资源服务被 service worker 卡死，让用户
-		// 看到清晰错误信息而不是无限转圈。
-		return withTimeout(doEnsureViewer(initialIsDark), 60_000, 'CAD 引擎初始化');
+		// rewriteWorkersToBlob 各 worker 拉取）加起来正常 ≤ 几秒，最坏 ≤ 15s。
+		// 30s 后还没好基本可以判定是 webview 资源服务被 service worker 卡死，让
+		// 用户看到清晰错误，也方便宿主 watchdog 早点弹"重载视图"横幅。
+		return withTimeout(doEnsureViewer(initialIsDark), 30_000, 'CAD 引擎初始化');
 	}
 
 	async function doEnsureViewer(initialIsDark) {
@@ -449,12 +453,53 @@
 
 		if (!interactionsConfigured) {
 			interactionsConfigured = true;
+			// 右键：有选区 → 弹自定义菜单；无选区 → 仅阻止系统菜单，让 OrbitControls 继续走 PAN。
+			const onContextMenu = (e) => {
+				e.preventDefault();
+				if (lastSelectionEntities.length > 0) {
+					showContextMenu(e.clientX, e.clientY);
+				}
+			};
 			const canvas = canvasHost?.querySelector?.('canvas');
 			if (canvas) {
-				canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+				canvas.addEventListener('contextmenu', onContextMenu);
 			}
-			canvasHost?.addEventListener('contextmenu', (e) => e.preventDefault());
+			canvasHost?.addEventListener('contextmenu', onContextMenu);
+
+			// 任意位置左键 / 滚轮 → 关菜单（点菜单本身则由菜单的 click handler 处理后再关）。
+			document.addEventListener('mousedown', (e) => {
+				if (ctxMenuEl && !ctxMenuEl.hidden && !ctxMenuEl.contains(e.target)) {
+					hideContextMenu();
+				}
+			}, true);
+			document.addEventListener('wheel', () => hideContextMenu(), { passive: true });
+			window.addEventListener('blur', () => hideContextMenu());
+
+			// 菜单项委托点击。
+			if (ctxMenuEl) {
+				ctxMenuEl.addEventListener('click', (e) => {
+					const item = /** @type {HTMLElement|null} */ (e.target?.closest?.('.wfm-cad-ctx-item'));
+					if (!item) { return; }
+					const action = item.getAttribute('data-action');
+					hideContextMenu();
+					if (action === 'send-selection') {
+						sendSelectionToChat();
+					} else if (action === 'delete-selection') {
+						deleteSelectedEntities();
+					}
+				});
+			}
 		}
+	}
+
+	function sendSelectionToChat() {
+		if (!currentDoc || lastSelectionEntities.length === 0) { return; }
+		vscode.postMessage({
+			kind: 'sendSelection',
+			entities: lastSelectionEntities,
+			sourceUri: currentDoc.sourceUri,
+			fileName: currentDoc.fileName,
+		});
 	}
 
 	function getViewModeEnum(name) {
@@ -1027,6 +1072,15 @@
 	if (modeBtn) {
 		modeBtn.addEventListener('click', () => {
 			setViewMode(currentViewMode === 'pan' ? 'select' : 'pan');
+		});
+	}
+
+	if (refreshBtn) {
+		refreshBtn.addEventListener('click', () => {
+			// 通知 main 销毁并重建 webview——比单纯 reload 字节更重，但能恢复
+			// vendor bundle / WASM 卡死。正常使用没必要点；只在感觉视图卡了
+			// 但又不想 Reload Window 时用。
+			vscode.postMessage({ kind: 'reloadRequest' });
 		});
 	}
 

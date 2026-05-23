@@ -1,0 +1,344 @@
+/*---------------------------------------------------------------------------------------------
+ *  WFM Studio – Knowledge Base sidebar view styles.
+ *--------------------------------------------------------------------------------------------*/
+
+:root {
+	--kb-font-size: 13px;
+	--kb-padding: 8px 12px;
+	--kb-border: 1px solid var(--vscode-widget-border, rgba(128,128,128,.35));
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+	font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, sans-serif);
+	font-size: var(--kb-font-size);
+	color: var(--vscode-foreground);
+	background: var(--vscode-sideBar-background);
+	height: 100vh;
+	overflow: hidden;
+}
+
+/* ── Layout ────────────────────────────────────────── */
+.kb-root {
+	display: flex;
+	flex-direction: column;
+	height: 100vh;
+}
+
+/* ── Config form ─────────────────────────────────────── */
+.kb-form {
+	padding: 14px 12px 12px;
+	overflow-y: auto;
+}
+.kb-form-title {
+	font-size: 13px;
+	font-weight: 600;
+	margin-bottom: 4px;
+}
+.kb-form-hint {
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	margin-bottom: 12px;
+}
+.kb-form-error {
+	font-size: 11px;
+	color: var(--vscode-errorForeground);
+	background: var(--vscode-inputValidation-errorBackground, rgba(220, 60, 60, .12));
+	border: 1px solid var(--vscode-inputValidation-errorBorder, rgba(220, 60, 60, .5));
+	padding: 6px 8px;
+	border-radius: 3px;
+	margin-bottom: 10px;
+	word-break: break-word;
+}
+.kb-field {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin-bottom: 10px;
+}
+.kb-field > span {
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+}
+.kb-field input {
+	padding: 5px 8px;
+	font-size: var(--kb-font-size);
+	font-family: var(--vscode-font-family, inherit);
+	border: var(--kb-border);
+	border-radius: 3px;
+	background: var(--vscode-input-background);
+	color: var(--vscode-input-foreground);
+	outline: none;
+	width: 100%;
+}
+.kb-field input:focus {
+	border-color: var(--vscode-focusBorder);
+}
+.kb-form-actions {
+	display: flex;
+	gap: 6px;
+	margin-top: 6px;
+}
+.kb-btn-primary,
+.kb-btn-ghost {
+	font-family: var(--vscode-font-family, inherit);
+	font-size: var(--kb-font-size);
+	padding: 5px 12px;
+	border-radius: 3px;
+	cursor: pointer;
+	border: 1px solid transparent;
+}
+.kb-btn-primary {
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	flex: 1;
+}
+.kb-btn-primary:hover:not(:disabled) {
+	background: var(--vscode-button-hoverBackground);
+}
+.kb-btn-primary:disabled {
+	opacity: .6;
+	cursor: default;
+}
+.kb-btn-ghost {
+	background: transparent;
+	color: var(--vscode-foreground);
+	border-color: var(--vscode-widget-border, rgba(128,128,128,.4));
+}
+.kb-btn-ghost:hover {
+	background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.15));
+}
+.kb-form-foot {
+	margin-top: 12px;
+	font-size: 11px;
+	text-align: center;
+}
+.kb-form-foot a {
+	color: var(--vscode-textLink-foreground);
+	cursor: pointer;
+	text-decoration: none;
+}
+.kb-form-foot a:hover {
+	text-decoration: underline;
+}
+
+/* ── Search bar ─────────────────────────────────────── */
+.kb-search {
+	display: flex;
+	padding: var(--kb-padding);
+	gap: 6px;
+	align-items: center;
+}
+.kb-search input {
+	flex: 1;
+	padding: 4px 8px;
+	font-size: var(--kb-font-size);
+	border: var(--kb-border);
+	border-radius: 3px;
+	background: var(--vscode-input-background);
+	color: var(--vscode-input-foreground);
+	outline: none;
+}
+.kb-search input:focus {
+	border-color: var(--vscode-focusBorder);
+}
+.kb-icon-btn {
+	background: transparent;
+	color: var(--vscode-foreground);
+	border: none;
+	width: 22px;
+	height: 22px;
+	border-radius: 3px;
+	cursor: pointer;
+	font-size: 14px;
+	line-height: 1;
+	padding: 0;
+	opacity: .75;
+}
+.kb-icon-btn:hover {
+	background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.18));
+	opacity: 1;
+}
+
+/* ── Document list ──────────────────────────────────── */
+.kb-docs {
+	flex: 1;
+	overflow-y: auto;
+	padding: 2px 0 4px;
+}
+
+.kb-doc {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 4px 12px;
+	cursor: pointer;
+	user-select: none;
+}
+.kb-doc:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+.kb-doc.active {
+	background: var(--vscode-list-activeSelectionBackground);
+	color: var(--vscode-list-activeSelectionForeground);
+}
+.kb-doc-icon {
+	flex: 0 0 16px;
+	margin-top: 2px;
+	color: var(--vscode-symbolIcon-fileForeground, var(--vscode-descriptionForeground));
+	opacity: .85;
+}
+.kb-icon-btn svg {
+	display: block;
+	margin: auto;
+}
+.kb-doc-body {
+	flex: 1;
+	min-width: 0;
+}
+.kb-doc-name {
+	font-weight: 500;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.kb-doc-meta {
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	margin-top: 2px;
+	display: flex;
+	gap: 8px;
+	align-items: center;
+}
+.kb-doc-status {
+	font-size: 10px;
+	padding: 1px 5px;
+	border-radius: 3px;
+}
+.kb-doc-status.completed {
+	background: rgba(80,160,80,.18);
+	color: var(--vscode-testing-iconPassed, #6a9955);
+}
+.kb-doc-status.error {
+	background: rgba(200,60,60,.18);
+	color: var(--vscode-errorForeground, #e06c75);
+}
+.kb-doc-status.indexing {
+	background: rgba(60,120,200,.18);
+	color: #519aba;
+}
+
+/* ── Segments panel ─────────────────────────────────── */
+.kb-segments {
+	overflow-y: auto;
+	flex: 1;
+}
+
+.kb-segments-header {
+	padding: 6px 12px;
+	font-weight: 600;
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+	display: flex;
+	gap: 10px;
+	align-items: center;
+	border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,.2));
+}
+.kb-segments-header .back {
+	cursor: pointer;
+	color: var(--vscode-textLink-foreground);
+	flex: 0 0 auto;
+}
+.kb-segments-header .kb-doc-title {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--vscode-foreground);
+}
+
+.kb-segment {
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,.1));
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--vscode-foreground);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+.kb-segment-pos {
+	font-size: 10px;
+	color: var(--vscode-descriptionForeground);
+	margin-bottom: 4px;
+}
+
+/* ── Search results ─────────────────────────────────── */
+.kb-result {
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,.1));
+}
+.kb-result-doc {
+	font-size: 11px;
+	color: var(--vscode-textLink-foreground);
+	margin-bottom: 3px;
+}
+.kb-result-content {
+	font-size: 12px;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+.kb-result-score {
+	font-size: 10px;
+	color: var(--vscode-descriptionForeground);
+	margin-top: 3px;
+}
+
+/* ── Empty / error / loading ───────────────────────── */
+.kb-empty,
+.kb-error,
+.kb-loading {
+	padding: 20px 12px;
+	text-align: center;
+	color: var(--vscode-descriptionForeground);
+	font-size: 12px;
+}
+.kb-error {
+	color: var(--vscode-errorForeground);
+}
+.kb-loading {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+}
+.kb-spinner {
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+	border: 2px solid var(--vscode-descriptionForeground);
+	border-top-color: transparent;
+	animation: kb-spin 0.9s linear infinite;
+	display: inline-block;
+}
+@keyframes kb-spin {
+	to { transform: rotate(360deg); }
+}
+
+/* ── Bottom status bar ─────────────────────────────── */
+.kb-status {
+	padding: 4px 12px;
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	border-top: 1px solid var(--vscode-widget-border, rgba(128,128,128,.2));
+	display: flex;
+	justify-content: space-between;
+}
+.kb-status a {
+	color: var(--vscode-textLink-foreground);
+	cursor: pointer;
+	text-decoration: none;
+}
+.kb-status a:hover {
+	text-decoration: underline;
+}

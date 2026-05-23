@@ -255,3 +255,91 @@ body.is-light #wfm-cad-tip {
 	color: #ffffff;
 	text-decoration: underline;
 }
+
+/* ── 选中徽标 ─────────────────────────────────────────────── */
+#wfm-cad-sel-badge {
+	position: absolute;
+	left: 50%;
+	bottom: 16px;
+	transform: translateX(-50%);
+	padding: 6px 12px;
+	background: rgba(0, 0, 0, 0.75);
+	color: #f3f3f3;
+	border-radius: 4px;
+	font-size: 12px;
+	z-index: 11;
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+	pointer-events: none;
+}
+
+body.is-light #wfm-cad-sel-badge {
+	background: rgba(255, 255, 255, 0.95);
+	color: #1f1f1f;
+	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+/* ── 右键菜单 ─────────────────────────────────────────────── */
+#wfm-cad-ctx-menu {
+	position: fixed;
+	z-index: 100;
+	min-width: 180px;
+	padding: 4px 0;
+	background: #2b2b2b;
+	color: #f3f3f3;
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	border-radius: 4px;
+	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+	font-size: 12px;
+	user-select: none;
+}
+
+body.is-light #wfm-cad-ctx-menu {
+	background: #ffffff;
+	color: #1f1f1f;
+	border-color: rgba(0, 0, 0, 0.12);
+	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.wfm-cad-ctx-item {
+	padding: 6px 16px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.wfm-cad-ctx-item:hover {
+	background: #094771;
+	color: #ffffff;
+}
+
+body.is-light .wfm-cad-ctx-item:hover {
+	background: #e3effa;
+	color: #0a3a72;
+}
+
+.wfm-cad-ctx-item.wfm-cad-ctx-danger {
+	color: #f48771;
+}
+
+.wfm-cad-ctx-item.wfm-cad-ctx-danger:hover {
+	background: #5a1d1d;
+	color: #ffffff;
+}
+
+body.is-light .wfm-cad-ctx-item.wfm-cad-ctx-danger {
+	color: #c0392b;
+}
+
+body.is-light .wfm-cad-ctx-item.wfm-cad-ctx-danger:hover {
+	background: #fde2dd;
+	color: #8b1c10;
+}
+
+.wfm-cad-ctx-sep {
+	height: 1px;
+	margin: 4px 0;
+	background: rgba(255, 255, 255, 0.1);
+}
+
+body.is-light .wfm-cad-ctx-sep {
+	background: rgba(0, 0, 0, 0.08);
+}

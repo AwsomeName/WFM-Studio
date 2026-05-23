@@ -141,6 +141,8 @@ import { McpGatewayService } from '../../platform/mcp/node/mcpGatewayService.js'
 import { McpGatewayChannel } from '../../platform/mcp/node/mcpGatewayChannel.js';
 import { IWfmClaudeService } from '../../platform/wfmClaude/common/wfmClaude.js';
 import { WfmClaudeMainService } from '../../platform/wfmClaude/electron-main/wfmClaudeMainService.js';
+import { IWfmStepConverterService } from '../../platform/wfmStepConverter/common/wfmStepConverter.js';
+import { WfmStepConverterMainService } from '../../platform/wfmStepConverter/electron-main/wfmStepConverterMainService.js';
 import { IWebContentExtractorService } from '../../platform/webContentExtractor/common/webContentExtractor.js';
 import { NativeWebContentExtractorService } from '../../platform/webContentExtractor/electron-main/webContentExtractorService.js';
 import { AgentNetworkFilterService, IAgentNetworkFilterService } from '../../platform/networkFilter/common/networkFilterService.js';
@@ -1196,6 +1198,9 @@ export class CodeApplication extends Disposable {
 		// WFM Studio: Claude Code CLI bridge (spawns `claude` subprocess for chat agent)
 		services.set(IWfmClaudeService, new SyncDescriptor(WfmClaudeMainService, undefined, false /* proxied to renderer */));
 
+		// WFM Studio: STEP → GLB converter bridge (spawns `python3 step_to_glb.py` for 3D viewer)
+		services.set(IWfmStepConverterService, new SyncDescriptor(WfmStepConverterMainService, undefined, false /* proxied to renderer */));
+
 		// Dev Only: CSS service (for ESM)
 		services.set(ICSSDevelopmentService, new SyncDescriptor(CSSDevelopmentService, undefined, true));
 
@@ -1343,6 +1348,10 @@ export class CodeApplication extends Disposable {
 		// WFM Studio: Claude Code CLI bridge (renderer → main process spawn)
 		const wfmClaudeChannel = ProxyChannel.fromService(accessor.get(IWfmClaudeService), disposables);
 		mainProcessElectronServer.registerChannel('wfmClaude', wfmClaudeChannel);
+
+		// WFM Studio: STEP → GLB converter bridge (renderer → main process spawn)
+		const wfmStepConverterChannel = ProxyChannel.fromService(accessor.get(IWfmStepConverterService), disposables);
+		mainProcessElectronServer.registerChannel('wfmStepConverter', wfmStepConverterChannel);
 
 		// Logger
 		const loggerChannel = new LoggerChannel(accessor.get(ILoggerMainService),);

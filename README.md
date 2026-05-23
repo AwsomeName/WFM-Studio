@@ -28,6 +28,7 @@ WFM-Studio/
 | [`docs/ARCH_AGENT_GATEWAY.md`](docs/ARCH_AGENT_GATEWAY.md) | [已废弃] 旧 Agent 网关架构 |
 | [`docs/ARCH_AGENT_SDK_NATIVE.md`](docs/ARCH_AGENT_SDK_NATIVE.md) | [已废弃] OpenAI Agents SDK 架构 |
 | [`docs/ARCH_CAD_REVIEW.md`](docs/ARCH_CAD_REVIEW.md) | CAD 审图架构 |
+| [`docs/CAD_PLATE_TO_3D.md`](docs/CAD_PLATE_TO_3D.md) | 钢板下料图 2D → 3D（DWG → STEP） |
 | [`docs/UPSTREAM_PATCHES.md`](docs/UPSTREAM_PATCHES.md) | vscode fork 改动登记 |
 | [`docs/VSCODE_UPSTREAM.md`](docs/VSCODE_UPSTREAM.md) | vscode 升级流程 |
 | [`.cursor/rules/wfm-ide-fork-policy.mdc`](.cursor/rules/wfm-ide-fork-policy.mdc) | wfm-ide 定制守则（agent 必读） |

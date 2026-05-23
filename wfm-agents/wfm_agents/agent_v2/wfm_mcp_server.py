@@ -415,6 +415,171 @@ def cad_export_dxf(source_path: str, output_path: str | None = None) -> str:
 
 
 @mcp.tool()
+def cad_plate_to_step(
+    source_path: str,
+    output_path: str | None = None,
+    thickness_mm: float | None = None,
+    also_stl: bool = False,
+    also_glb: bool = False,
+    layer_whitelist: list[str] | None = None,
+) -> str:
+    """Convert a steel-plate fabrication drawing (单视图钢板下料图) to a 3D STEP file.
+
+    The 2D outline is extruded along Z by the detected (or supplied) plate
+    thickness, producing a watertight solid suitable for downstream CAD/CAE
+    workflows.
+
+    Args:
+        source_path: Input ``.dwg`` or ``.dxf`` (workspace-relative or absolute).
+        output_path: Output ``.step`` path (workspace-relative). Defaults to
+            ``<source>.step`` next to the input.
+        thickness_mm: Override the plate thickness in mm. When ``None`` the
+            extractor reads it from title-block ATTRIB ("材料名称: 30钢板…")
+            or text tokens like ``t30`` / ``δ20`` / ``厚 25``.
+        also_stl: If True, also write a ``.stl`` mesh next to the STEP file.
+        also_glb: If True, also write a ``.glb`` for web preview.
+        layer_whitelist: Optional explicit list of DXF layers to use as
+            geometry source. Skips the default layer blacklist heuristics.
+
+    Returns:
+        JSON: ``{outputs, thickness_mm, thickness_source, outer_bbox_mm,
+        holes, volume_mm3, mass_g_steel, warnings, layers_used, layers_ignored}``.
+        On failure returns ``Error: <reason>`` (e.g. drawing is a logo, no
+        closed outline, thickness unknown).
+    """
+    from ..workspace import resolve_within, WorkspaceViolation  # noqa: PLC0415
+    from ..cad.plate_to_3d import (  # noqa: PLC0415
+        NotAPlateError, PlateToCadError, plate_to_step,
+    )
+
+    root = _root()
+
+    p = Path(source_path)
+    if p.is_absolute():
+        src = p
+    else:
+        try:
+            src = resolve_within(root, source_path)
+        except WorkspaceViolation as exc:
+            return f"Error: {exc}"
+    if not src.is_file():
+        return f"Error: 文件不存在: {source_path}"
+    if src.suffix.lower() not in (".dwg", ".dxf"):
+        return f"Error: 仅支持 .dwg / .dxf 输入，收到 {src.suffix}"
+
+    if output_path:
+        out_p = Path(output_path)
+        if out_p.is_absolute():
+            dst_step = out_p
+        else:
+            try:
+                dst_step = resolve_within(root, output_path)
+            except WorkspaceViolation as exc:
+                return f"Error: {exc}"
+    else:
+        dst_step = src.with_suffix(".step")
+
+    dst_stl = dst_step.with_suffix(".stl") if also_stl else None
+    dst_glb = dst_step.with_suffix(".glb") if also_glb else None
+
+    try:
+        result = plate_to_step(
+            src, dst_step,
+            thickness_mm=thickness_mm,
+            also_stl=dst_stl,
+            also_glb=dst_glb,
+            layer_whitelist=layer_whitelist,
+        )
+    except NotAPlateError as exc:
+        return f"Error: 不是有效的钢板零件图: {exc}"
+    except PlateToCadError as exc:
+        return f"Error: {exc}"
+    except Exception as exc:
+        return f"Error: {type(exc).__name__}: {exc}"
+
+    # 路径转 workspace 相对（便于前端展示）
+    def _rel(p_str: str) -> str:
+        pp = Path(p_str)
+        try:
+            return str(pp.relative_to(root))
+        except ValueError:
+            return str(pp)
+
+    e = result.extract
+    return json.dumps({
+        "outputs": {k: _rel(v) for k, v in result.outputs.items()},
+        "thickness_mm": e.thickness_mm,
+        "thickness_source": e.thickness_source,
+        "outer_bbox_mm": list(e.outer_bbox_mm),
+        "outer_area_mm2": round(e.outer_area_mm2, 1),
+        "holes": e.holes,
+        "volume_mm3": round(result.volume_mm3, 1),
+        "mass_kg_steel": round(result.mass_g_steel / 1000.0, 3),
+        "layers_used": e.layers_considered,
+        "layers_ignored": e.layers_ignored,
+        "blocks_ignored": e.blocks_ignored,
+        "warnings": e.warnings,
+    }, ensure_ascii=False)
+
+
+@mcp.tool()
+def cad_plate_inspect(source_path: str) -> str:
+    """Dry-run the 2D-to-3D plate analysis: report detected outline, holes,
+    thickness, layers used, and any warnings — without writing a STEP file.
+
+    Useful to diagnose drawings that fail :func:`cad_plate_to_step` (e.g.
+    thickness not auto-detectable, or shape under-segmented by 破断线).
+    """
+    from ..workspace import resolve_within, WorkspaceViolation  # noqa: PLC0415
+    from ..cad.plate_to_3d import (  # noqa: PLC0415
+        NotAPlateError, PlateToCadError, extract_plate_geometry,
+    )
+    from ..cad.dwg import resolve_cad_file, ToolError  # noqa: PLC0415
+
+    root = _root()
+    p = Path(source_path)
+    if p.is_absolute():
+        src = p
+    else:
+        try:
+            src = resolve_within(root, source_path)
+        except WorkspaceViolation as exc:
+            return f"Error: {exc}"
+    if not src.is_file():
+        return f"Error: 文件不存在: {source_path}"
+
+    try:
+        dxf_path = resolve_cad_file(src)
+    except ToolError as exc:
+        return f"Error: {exc}"
+
+    try:
+        _outer, _holes, ext = extract_plate_geometry(dxf_path)
+    except NotAPlateError as exc:
+        return json.dumps({
+            "is_plate": False,
+            "reason": str(exc),
+        }, ensure_ascii=False)
+    except PlateToCadError as exc:
+        return f"Error: {exc}"
+
+    return json.dumps({
+        "is_plate": True,
+        "thickness_mm": ext.thickness_mm,
+        "thickness_source": ext.thickness_source,
+        "outer_bbox_mm": list(ext.outer_bbox_mm),
+        "outer_area_mm2": round(ext.outer_area_mm2, 1),
+        "outer_loop_points": ext.outer_loop_points,
+        "holes": ext.holes,
+        "layers_used": ext.layers_considered,
+        "layers_ignored": ext.layers_ignored,
+        "blocks_ignored": ext.blocks_ignored,
+        "raw_entity_counts": ext.raw_entity_counts,
+        "warnings": ext.warnings,
+    }, ensure_ascii=False)
+
+
+@mcp.tool()
 def cad_convert_format(source_path: str, output_path: str | None = None) -> str:
     """Convert DWG to DXF format."""
     from ..workspace import resolve_within, WorkspaceViolation  # noqa: PLC0415
@@ -494,6 +659,72 @@ def docx_read(path: str, extract_tables_only: bool = False) -> str:
             "stats": content["stats"],
         }
     return format_docx_content(content)
+
+
+@mcp.tool()
+def docx_write(
+    path: str,
+    content: str,
+    template_path: str | None = None,
+    variables: str | None = None,
+) -> str:
+    """Create or overwrite a .docx file from Markdown content.
+
+    Optionally inherits styles, headers, footers, and page setup from a
+    template .docx file.  Use ``variables`` (JSON) to replace
+    ``{{placeholder}}`` tokens in the template's headers and footers.
+
+    Markdown subset supported:
+      - Headings: # H1 through ###### H6
+      - Paragraphs: plain text
+      - Tables: | col | col | with |---|---| separator
+      - Bullet lists: - item or * item
+      - Numbered lists: 1. item
+      - Inline: **bold**, *italic*
+
+    Args:
+        path: Output .docx path (workspace-relative).
+        content: Markdown body content.
+        template_path: Optional template .docx to inherit styles (workspace-relative).
+        variables: Optional JSON ``{"key": "value"}`` for ``{{key}}`` replacement
+            in template headers/footers.
+    """
+    import json  # noqa: PLC0415
+
+    from ..workspace import resolve_within, WorkspaceViolation  # noqa: PLC0415
+    from ..docx.writer import write_docx_from_markdown  # noqa: PLC0415
+
+    root = _root()
+    try:
+        dst = resolve_within(root, path)
+    except WorkspaceViolation as exc:
+        return f"Error: {exc}"
+
+    if dst.suffix.lower() != ".docx":
+        return f"Error: 仅支持 .docx 文件: {path}"
+
+    tpl_path = None
+    if template_path:
+        try:
+            tpl_path = resolve_within(root, template_path)
+        except WorkspaceViolation as exc:
+            return f"Error: {exc}"
+        if not tpl_path.is_file():
+            return f"Error: 模板文件不存在: {template_path}"
+
+    variables_dict: dict[str, str] | None = None
+    if variables:
+        try:
+            variables_dict = json.loads(variables)
+        except json.JSONDecodeError as exc:
+            return f"Error: variables JSON 解析失败: {exc}"
+        if not isinstance(variables_dict, dict):
+            return "Error: variables 必须是 JSON 对象 (字典)"
+
+    try:
+        return write_docx_from_markdown(dst, content, tpl_path, variables_dict)
+    except Exception as exc:
+        return f"Error: 文档生成失败: {exc}"
 
 
 if __name__ == "__main__":

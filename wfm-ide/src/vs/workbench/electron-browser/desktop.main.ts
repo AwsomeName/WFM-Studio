@@ -34,6 +34,7 @@ import { RemoteFileSystemProviderClient } from '../services/remote/common/remote
 import { ConfigurationCache } from '../services/configuration/common/configurationCache.js';
 import { ISignService } from '../../platform/sign/common/sign.js';
 import { IWfmClaudeService } from '../../platform/wfmClaude/common/wfmClaude.js';
+import { IWfmStepConverterService } from '../../platform/wfmStepConverter/common/wfmStepConverter.js';
 import { IProductService } from '../../platform/product/common/productService.js';
 import { IUriIdentityService } from '../../platform/uriIdentity/common/uriIdentity.js';
 import { UriIdentityService } from '../../platform/uriIdentity/common/uriIdentityService.js';
@@ -250,6 +251,10 @@ export class DesktopMain extends Disposable {
 		// WFM Studio: Claude Code CLI bridge (talks to main-process WfmClaudeMainService)
 		const wfmClaudeService = ProxyChannel.toService<IWfmClaudeService>(mainProcessService.getChannel('wfmClaude'));
 		serviceCollection.set(IWfmClaudeService, wfmClaudeService);
+
+		// WFM Studio: STEP → GLB converter bridge (talks to main-process WfmStepConverterMainService)
+		const wfmStepConverterService = ProxyChannel.toService<IWfmStepConverterService>(mainProcessService.getChannel('wfmStepConverter'));
+		serviceCollection.set(IWfmStepConverterService, wfmStepConverterService);
 
 		// Files
 		const fileService = this._register(new FileService(logService));

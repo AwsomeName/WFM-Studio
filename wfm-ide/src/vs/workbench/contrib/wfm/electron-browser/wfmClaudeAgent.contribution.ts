@@ -90,6 +90,13 @@ export class WfmClaudeAgentContribution extends Disposable implements IWorkbench
 		// installed=true so any "install extension" prompts disappear. We are
 		// the "installed" chat experience.
 		ChatContextKeys.Setup.installed.bindTo(ctx).set(true);
+		// Upstream only flips `chatIsEnabled` inside `registerAgentImplementation`,
+		// but we register via `registerDynamicAgent` which never touches it.
+		// Without this, the title-bar menu items "New Chat" / "New Chat Editor"
+		// / "New Chat Window" stay greyed out (their precondition is
+		// `ChatContextKeys.enabled`) and the history (`workbench.action.chat.history`)
+		// button doesn't render in the chat view title.
+		ChatContextKeys.enabled.bindTo(ctx).set(true);
 	}
 
 	private _registerAgents(): void {
@@ -109,7 +116,10 @@ export class WfmClaudeAgentContribution extends Disposable implements IWorkbench
 				isDynamic: true,
 				metadata: {
 					themeIcon: Codicon.sparkle,
-					isSticky: true,
+					// isSticky 故意不开：WFM 只有一个默认 agent，sticky 回填会在每次发送
+					// 后把输入框重置成 `@wfm.claude.agent `，纯噪音，还会扰乱光标。
+					// 触发点：chatInputEditorContrib.ts InputEditorSlashCommandMode.repopulateAgentCommand
+					isSticky: false,
 				},
 				slashCommands: [],
 				locations: [ChatAgentLocation.Chat],
@@ -240,8 +250,12 @@ export class WfmClaudeAgentContribution extends Disposable implements IWorkbench
 		}
 
 		const wsUri = URI.file(workspaceRoot);
-		const seen = new Set<string>();
+		// 同 (path, range) 组合去重；纯 path 也单独去重一次。
+		const seenWithRange = new Set<string>();
 		const refs: string[] = [];
+		// docx 这种二进制文件，"行号"实际上是 webview 注入的段落 index；
+		// 给 Claude 的 @path 后面单独跟一条人类语义的提示，agent 拿到能直接理解。
+		const docxNotes: string[] = [];
 
 		for (const entry of entries as readonly IChatRequestVariableEntry[]) {
 			if (isImplicitVariableEntry(entry) && entry.enabled === false) {
@@ -257,18 +271,45 @@ export class WfmClaudeAgentContribution extends Disposable implements IWorkbench
 			const rel = relativePath(wsUri, uri);
 			// Workspace-relative when possible, else absolute; Claude Code resolves both.
 			const refPath = rel ?? uri.fsPath;
-			if (seen.has(refPath)) {
+
+			// range 仅在文件附件 + Location 形式 (value: { uri, range }) 时存在。
+			const rawValue = (entry as { value?: unknown }).value as { range?: { startLineNumber?: number; endLineNumber?: number } } | undefined;
+			const range = rawValue && typeof rawValue === 'object' && rawValue.range
+				&& typeof rawValue.range.startLineNumber === 'number'
+				&& typeof rawValue.range.endLineNumber === 'number'
+				? { start: rawValue.range.startLineNumber, end: rawValue.range.endLineNumber }
+				: undefined;
+
+			const isDocx = /\.docx$/i.test(refPath);
+			const dedupeKey = range ? `${refPath}#${range.start}-${range.end}` : refPath;
+			if (seenWithRange.has(dedupeKey)) {
 				continue;
 			}
-			seen.add(refPath);
-			// Quote paths containing whitespace so Claude treats them atomically.
-			refs.push(/\s/.test(refPath) ? `@"${refPath}"` : `@${refPath}`);
+			seenWithRange.add(dedupeKey);
+
+			const quote = (s: string) => /\s/.test(s) ? `"${s}"` : s;
+
+			if (range && isDocx) {
+				// docx：@路径不带 # 行号（避免 Claude 误以为是文本文件行号），
+				// 用独立一行的语义提示告诉它"这是第 X-Y 段"。
+				refs.push(`@${quote(refPath)}`);
+				const label = range.start === range.end
+					? `第 ${range.start} 段`
+					: `第 ${range.start}-${range.end} 段`;
+				docxNotes.push(`[Word 选区 · ${refPath} · ${label}]`);
+			} else if (range) {
+				// 文本类（dxf、源码、md …）：Claude Code CLI 接受 `@path#L3-L5` 行号语法。
+				refs.push(`@${quote(refPath)}#L${range.start}-L${range.end}`);
+			} else {
+				refs.push(`@${quote(refPath)}`);
+			}
 		}
 
-		if (refs.length === 0) {
+		if (refs.length === 0 && docxNotes.length === 0) {
 			return userText;
 		}
-		return `${refs.join(' ')}\n\n${userText}`;
+		const head = [refs.join(' '), ...docxNotes].filter(s => s.length > 0).join('\n');
+		return `${head}\n\n${userText}`;
 	}
 
 	private _md(text: string): IChatMarkdownContent {

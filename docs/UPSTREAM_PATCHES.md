@@ -139,10 +139,17 @@
 
 ### wfm-ide/src/vs/code/electron-main/app.ts
 
-- 改动类型：注释 if 分支
-- 改动摘要：`openFirstWindow` 中针对 `process.isEmbeddedApp || (args['agents'] && quality !== 'stable')` 触发 `windowsMainService.openAgentsWindow(...)` 的整个 if 块用 `// 原始：...` 注释保留
+- 改动类型：注释 if 分支 + 新增 service / IPC channel 注册
+- 改动摘要：(1) `openFirstWindow` 中针对 `process.isEmbeddedApp || (args['agents'] && quality !== 'stable')` 触发 `windowsMainService.openAgentsWindow(...)` 的整个 if 块用 `// 原始：...` 注释保留。(2) `services.set(...)` 段追加 `IWfmClaudeService` / `IWfmStepConverterService` 两个本地服务（WFM Studio MCP/STEP 转换桥）。(3) `mainProcessElectronServer.registerChannel(...)` 段追加 `wfmClaude` / `wfmStepConverter` 两个 ProxyChannel，给 renderer 调用。新增的 import 在 vscode 升级时只需保留我们新增的 4 行 import；冲突概率极低（追加在文件末尾的 import 区与 services 注册区）
 - 目的：禁掉 Sessions Window 入口。Microsoft Copilot Agents Application 的 Sessions Window（`vs/sessions/electron-browser/sessions.html`）是一个**只为 Copilot Agents app 做的简化工作台**：左侧 Sidebar 直接挂 "Sessions / Customizations / Agents / Skills / Hooks / MCP / Plugins"，中央是 Chat Bar（"Copilot CLI" + "Default Approvals"），右侧 AuxiliaryBar 是专属的 "Files / Changes" 视图。该窗口加载 `sessions.common.main.ts` 而非 `workbench.common.main.ts`，因此 wfm 的 cadReview / docxViewer / htmlPreview / settings / wfm.contribution / wfmClaudeAgent 全部不会注册——表现就是布局左右颠倒、点 .dwg 直接进 BinaryFileEditor "binary or unsupported encoding" fallback、Explorer 右键菜单空白
 - 升级检查：上游若把 sessions window 入口拆到别处或重命名（例如把 `openAgentsWindow` 改成 `openCopilotApp`），跟随重定位注释
+
+### wfm-ide/src/vs/workbench/electron-browser/desktop.main.ts
+
+- 改动类型：新增 service 连接
+- 改动摘要：在 `mainProcessService.getChannel('sign')` 之后追加 `ProxyChannel.toService<IWfmClaudeService>(...)` 与 `ProxyChannel.toService<IWfmStepConverterService>(...)` 两段，把主进程注册的服务桥接给 renderer。新增 import 两条（`IWfmClaudeService` 与 `IWfmStepConverterService`）
+- 目的：让 renderer 可以通过 DI 访问 Claude CLI bridge 与 STEP→GLB 转换器。renderer 是 sandboxed 的，不能直接 `child_process`，所有 spawn 必须走主进程
+- 升级检查：上游若重写 ServicesAccessor / serviceCollection 部分，需要把这两条 register 重新落到合适位置
 
 ### wfm-ide/src/vs/platform/windows/electron-main/windowsMainService.ts
 
@@ -150,6 +157,20 @@
 - 改动摘要：`createWindow` 计算 `isSessionsWindow` 时由「workspace.configPath === environmentMainService.agentSessionsWorkspace」改写为常量 `false`，原表达式以 `// 原始: ...` 形式保留
 - 目的：兜底关闭 Sessions Window。即使用户磁盘上残留 `agentSessionsWorkspace.code-workspace`（被早期的 OpenAgentsWindow Action 触发后写入用户态），下次启动也强制走 `workbench.html` 而不是 `sessions.html`。配合 `app.ts` 同步改动构成「app 入口不进 + 即便进了也走普通 workbench」双保险。`windowImpl.ts` line 1212 的 `else if (configuration.isSessionsWindow)` 现在永远不命中
 - 升级检查：上游若把 `isSessionsWindow` 改为函数或挪到别处，沿用同样常量化处理
+
+### wfm-ide/src/vs/workbench/contrib/chat/browser/agentSessions/localAgentSessionsController.ts
+
+- 改动类型：扩展 `onDidDisposeSession` handler（一处函数体扩写）
+- 改动摘要：handler 改成 `async`，在原本只 fire `removed` 的基础上追加一次 `await this.refresh(CancellationToken.None)`，然后 fire `{ removed, addedOrUpdated: this._items.values() }`
+- 目的：修复 SESSIONS 视图在 chat 面板新建会话后旧 session 一直不出现的 bug。上游事件链遗漏：旧模型 dispose → 后台 `storeSessions` 写完磁盘 → fire `onDidDisposeModel` → handler 只对外说 "remove 这一条"，但**没**通知视图"这一条已经从 live 变 historical 了"，于是 SESSIONS 永远空到 IDE 重启
+- 升级检查：若上游修复了这个 bug（在 dispose handler 里自己补 emit 了），把我们的扩展撤掉，回退到上游版本；若 `IChatSessionItemsDelta` 的结构变了（比如 `addedOrUpdated` 改名/拆字段），相应改一行
+
+### wfm-ide/src/vs/workbench/contrib/chat/browser/widgetHosts/viewPane/chatViewPane.ts
+
+- 改动类型：4 个 `static readonly` 常量值调整
+- 改动摘要：把 `SESSIONS_SIDEBAR_MIN_WIDTH` 从 200 改 150、`SESSIONS_SIDEBAR_DEFAULT_WIDTH` 从 300 改 180、`CHAT_WIDGET_DEFAULT_WIDTH` 从 300 改 220；`SESSIONS_SIDEBAR_VIEW_MIN_WIDTH` 通过求和自动变成 400（上游 600）
+- 目的：让 SESSIONS 侧栏（"多会话并存"的 UI 入口）在窄面板也能用。上游阈值 600px 几乎只在用户把 chat 面板拖得超大时才生效，默认窄宽度下永远回退 Stacked，"多会话"完全看不到。把组合阈值降到 400px 后，常见的右侧栏宽度（约 450~600px）就能并排出 SESSIONS 列表 + 当前 chat。这是 WFM 用户硬需求"新对话不要覆盖旧对话"的核心载体（widget 本身只能显示一个 session，多会话靠左侧列表常驻 + 切换达成）
+- 升级检查：若上游调宽数值或重构成响应式断点，按相同比例（chat:sidebar ≈ 220:180）重写；如果上游加了 zoom-level 适配，注意我们没跟。常量是 `static readonly`，subtree pull 出现 `value-only` 冲突几乎肯定就是这里
 
 ### wfm-ide/src/vs/workbench/contrib/chat/browser/chat.contribution.ts
 
@@ -162,13 +183,17 @@
   1. `ChatSetupContribution` 注册了 `workbench.action.chat.triggerSetup` / `triggerSetupForceSignIn` / `triggerSetupFromAccounts` / `signInIndicator`（钛色 "Sign In" 按钮挂在 `MenuId.TitleBarAdjacentCenter`）/ `triggerSetupAnonymousWithoutDialog` / `triggerSetupSupportAnonymous` / `UpgradePlanAction` / `EnableOveragesAction`，是 GitHub OAuth 登录、Copilot Pro 升级、扩展安装弹窗、AccountsContext 菜单 "Sign in to use AI features..." 的总入口。还会监听 `IExtensionsWorkbenchService` 同步 GitHub.copilot 安装状态，并注册 `ChatSetupExtensionUrlHandler` 接收 `vscode://github.copilot-chat/?...` 类型回调
   2. `ChatTeardownContribution` 通过 `chat.disableAIFeatures` 设置联动启用/禁用 GitHub.copilot 扩展，再 `setPartHidden(AUXILIARYBAR)`。WFM 没有 Copilot 扩展，相关逻辑无意义
   3. `ChatStatusBarEntry` 是右下角状态栏 "Sign In" / "Manage Copilot" 入口（依赖 `IChatEntitlementService.sentiment`），WFM 不需要
-- 联动假设：`contrib/wfm/electron-browser/wfmClaudeAgent.contribution.ts` 已通过 `ChatContextKeys.Setup.completed/installed/hidden=...`、`Entitlement.signedOut=false` 把所有 ChatSetup 类 `when` 子句压成 false。`agentTitleBarStatusWidget.ts` 中残留的 `CHAT_SETUP_ACTION_ID` 引用是字符串常量分支（仅在 `signedOut=true` 时走 sign-in 分支），由我们的 ctx 兜底跳过；该命令未注册时即使被 `executeCommand` 也只是静默 noop
+- 联动假设：`contrib/wfm/electron-browser/wfmClaudeAgent.contribution.ts` 已通过 `ChatContextKeys.Setup.completed/installed/hidden=...`、`Entitlement.signedOut=false`、`ChatContextKeys.enabled=true` 把所有 ChatSetup 类 `when` 子句以及 chat 启用门压成 ready。`agentTitleBarStatusWidget.ts` 中残留的 `CHAT_SETUP_ACTION_ID` 引用是字符串常量分支（仅在 `signedOut=true` 时走 sign-in 分支），由我们的 ctx 兜底跳过；该命令未注册时即使被 `executeCommand` 也只是静默 noop。`ChatContextKeys.enabled`（`chatIsEnabled`）必须显式置 true：上游 `ChatAgentService` 只在 `registerAgentImplementation` 那条路径里把它翻成 true，而我们走的 `registerDynamicAgent` 不碰它——不补这一行的话标题栏 "New Chat" / "New Chat Editor" / "New Chat Window" 与 `workbench.action.chat.history` 历史按钮全部置灰、cmd+N 无效
 - 升级检查：上游若把 `ChatSetupContribution` / `ChatTeardownContribution` / `ChatStatusBarEntry` 拆分到新模块或改名，对应注释三处都要重新定位；如果 `agentTitleBarStatusWidget` 改成强依赖 `triggerSetup` 命令存在（例如 precondition 检查 command 注册），需要补充一个 noop CommandsRegistry.registerCommand 占位
 
 ---
 
 ## 变更日志（每次修改或升级时追加一条）
 
+- 2026-05-23 修复 STEP/STL 3D viewer 在 sandboxed renderer 里转换失败（"Converting STEP to GLB" 永久卡住或弹"未找到 STEP → GLB 转换器"）：新增 `platform/wfmStepConverter/{common,electron-main}/` 服务（参照 `wfmClaude` 模式）。`code/electron-main/app.ts` 追加 `services.set(IWfmStepConverterService, ...)` 与 `mainProcessElectronServer.registerChannel('wfmStepConverter', ...)`；`workbench/electron-browser/desktop.main.ts` 追加 `ProxyChannel.toService<IWfmStepConverterService>(...)`。`contrib/wfm/stepViewer/browser/stepViewerEditor.ts` 删除内嵌的 `nodeRequire('child_process')` + `process.execPath` 解析（sandboxed renderer 拿不到），改 inject `IWfmStepConverterService`。Python + step_to_glb.py 路径解析（env / appRoot 向上找 / packaged Resources / 用户工作区）全部迁移到主进程的 `WfmStepConverterMainService._resolvePythonAndScript`。顺带把 `.stl` 注册到同一个 viewer（STLLoader 在 webview 内直接解析，不走 Python）
+- 2026-05-23 (2) 撤回当天早些时候在 `contrib/wfm/browser/wfm.contribution.ts` 新增的 `wfm.chat.newChatAsTab` action：用户实测后明确说"开主编辑器区不是想要的"，他们要的是 cursor 那种"在 chat 面板内部并排开 tab"。vscode ChatViewPane 一次只能渲染 1 个 session，原生 UI 最接近"多 tab 并存"的是 **SideBySide 布局**（左列表 / 右当前对话）。改 `chat/browser/widgetHosts/viewPane/chatViewPane.ts` 的 4 个静态常量，把启用 SideBySide 的宽度门槛从 600px 降到 400px，让常见侧栏宽度就能常驻 SESSIONS 列表，旧 session 永远点回来 = "并排多会话"。`cmd+N` / `ctrl+L` 全部走回上游 `ACTION_ID_NEW_CHAT`，配合本日早些时候 `localAgentSessionsController.ts` 的 dispose handler 补丁，旧 session 立即进 SESSIONS 列表
+- 2026-05-23 修复 SESSIONS（历史会话）列表在 "New Chat" 后持续为空的问题：`chat/browser/agentSessions/localAgentSessionsController.ts` 的 `onDidDisposeSession` handler 在 fire `removed` 之后追加一次 `await this.refresh(...)` + `fire({ removed, addedOrUpdated: this._items.values() })`。根因：上游只 fire `removed`，导致刚从 live 转为 historical 的 session 在 SESSIONS 视图里直接消失，必须重启 IDE 才会出现
+- 2026-05-23 修复 chat 标题栏 "New Chat" / "New Chat Editor" / "New Chat Window" 三个菜单项以及历史按钮（`workbench.action.chat.history`）置灰、cmd+N 无效的问题：`contrib/wfm/electron-browser/wfmClaudeAgent.contribution.ts` 的 `_bypassChatSetupGates()` 追加 `ChatContextKeys.enabled.bindTo(ctx).set(true)`。根因：上游 `ChatAgentService` 仅在 `registerAgentImplementation` 内部把 `chatIsEnabled` 翻成 true，我们用 `registerDynamicAgent` 注册 Claude agent 不会触发该路径，导致 `precondition: ChatContextKeys.enabled` 的所有按钮一直 disabled
 - 2026-05-23 永久关闭 Microsoft Copilot Sessions Window 入口：`code/electron-main/app.ts` 注释掉 `openFirstWindow` 里 `openAgentsWindow` 那段 if；`platform/windows/electron-main/windowsMainService.ts` 把 `isSessionsWindow` 常量化为 `false`。修复用户截图中"左侧 Sessions / Customizations、中央 Chat bar 带 Copilot CLI、右侧 Files/Changes"的反向布局，以及 .dwg 双击进 BinaryFileEditor 的现象。同时新增 `contrib/wfm/browser/wfm.contribution.ts` 通用「发送到对话」右键 Action（任意非目录文件 → 添加到 Chat 面板 attachmentModel）
 - 2026-05-23 剥离 ChatUI 登录/账户/订阅入口：`chat/browser/chat.contribution.ts` 注释 `ChatSetupContribution` / `ChatTeardownContribution` / `ChatStatusBarEntry` 三组贡献的 import 与 `registerWorkbenchContribution2`。覆盖 `workbench.action.chat.triggerSetup*` 命令族、TitleBar "Sign In" 按钮、AccountsContext "Sign in to use AI features..." 菜单项、`chat.disableAIFeatures` 联动 Copilot 扩展启停、状态栏 Copilot 入口。原有 `wfmClaudeAgent.contribution.ts` 的 ctx 兜底（Setup.completed=true / signedOut=false / installed=true）继续生效，`agentTitleBarStatusWidget` 走默认 Toggle Chat 路径
 - 2026-05-23 剥离 Microsoft Copilot "Agents" 子窗口与登录引导：`sessions.common.main.ts` 注释 welcome / accountMenu；`chat/electron-browser/chat.contribution.ts` 注释 `OpenAgentsWindowAction` 注册；`chatTipCatalog.ts` 注释 `tip.openAgentsWindow`。理由：本项目用本地 Claude CLI，不接 GitHub/Google/Apple OAuth

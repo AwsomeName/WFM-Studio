@@ -318,6 +318,7 @@ uv run uvicorn wfm_agents.server:app --reload --host 127.0.0.1 --port 8765
 **配套文档**：
 - [CAD_AI_FEASIBILITY.md](CAD_AI_FEASIBILITY.md) — 效果可行性、能力边界、必备工具底座、优先级建议（"能做到什么效果"）
 - [CAD_AI_SELECTION_REVIEW.md](CAD_AI_SELECTION_REVIEW.md) — 选区审图 / 截图多模态 / Issue 反标的实现方案（"怎么做"）
+- [CAD_PLATE_TO_3D.md](CAD_PLATE_TO_3D.md) — 钢板下料图自动 2D→3D（DWG → STEP/STL/GLB），MCP 工具 `cad_plate_to_step` / `cad_plate_inspect`
 
 - [ ] viewer ←→ 审图意见联动高亮（issue 行号 / 实体 handle 双向跳转）
 - [ ] 多模态视觉补充（cad-viewer 离屏 canvas → PNG 截图喂 GPT-4V / Claude 视觉）

@@ -93,15 +93,30 @@ export class LocalAgentsSessionsController extends Disposable implements IChatSe
 			addModelListeners(model);
 		}
 
-		this._register(this.chatService.onDidDisposeSession(e => {
+		this._register(this.chatService.onDidDisposeSession(async e => {
 			for (const sessionResource of e.sessionResources) {
 				this._modelListeners.deleteAndDispose(sessionResource);
 			}
 
 			const removedSessionResources = e.sessionResources.filter(resource => getChatSessionType(resource) === this.chatSessionType);
-			if (removedSessionResources.length) {
-				this._onDidChangeChatSessionItems.fire({ removed: removedSessionResources });
+			if (!removedSessionResources.length) {
+				return;
 			}
+
+			// WFM patch: refresh + emit addedOrUpdated so the just-persisted
+			// (now-historical) sessions get re-published to the SESSIONS view.
+			// Without this the dispose event only fires `removed`, and a
+			// session that transitioned from "live" to "historical" disappears
+			// from the SESSIONS list until the next IDE restart.
+			await this.refresh(CancellationToken.None);
+			if (this._isDisposed) {
+				return;
+			}
+
+			this._onDidChangeChatSessionItems.fire({
+				removed: removedSessionResources,
+				addedOrUpdated: Array.from(this._items.values()),
+			});
 		}));
 	}
 

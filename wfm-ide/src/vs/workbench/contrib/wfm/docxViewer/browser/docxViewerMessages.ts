@@ -23,6 +23,11 @@ export interface IDocxReadyMessage {
 	readonly kind: 'ready';
 }
 
+/** docx-preview 真正渲染完成（区别于 `ready` 的"脚本已起来"）。 */
+export interface IDocxRenderedMessage {
+	readonly kind: 'rendered';
+}
+
 export interface IDocxErrorMessage {
 	readonly kind: 'error';
 	readonly message: string;
@@ -35,7 +40,14 @@ export interface IDocxSelectionToChatMessage {
 	readonly selectedText: string;
 }
 
+/** viewer 工具栏「重载视图」按钮触发，让 main 销毁并重建 webview。 */
+export interface IDocxReloadRequestMessage {
+	readonly kind: 'reloadRequest';
+}
+
 export type DocxWebviewToMainMessage =
 	| IDocxReadyMessage
+	| IDocxRenderedMessage
 	| IDocxErrorMessage
-	| IDocxSelectionToChatMessage;
+	| IDocxSelectionToChatMessage
+	| IDocxReloadRequestMessage;

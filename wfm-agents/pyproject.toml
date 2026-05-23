@@ -10,6 +10,7 @@ dependencies = [
     "python-docx>=1.1",
     "build123d>=0.10.0",
     "trimesh>=4.12.2",
+    "shapely>=2.0",
 ]
 
 [project.optional-dependencies]

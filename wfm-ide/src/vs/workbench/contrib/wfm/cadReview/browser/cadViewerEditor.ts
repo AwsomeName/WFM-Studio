@@ -9,7 +9,7 @@
 import * as dom from '../../../../../base/browser/dom.js';
 import { Dimension } from '../../../../../base/browser/dom.js';
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
-import { DisposableStore } from '../../../../../base/common/lifecycle.js';
+import { DisposableStore, MutableDisposable } from '../../../../../base/common/lifecycle.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { FileAccess } from '../../../../../base/common/network.js';
 import { extname, joinPath } from '../../../../../base/common/resources.js';
@@ -128,6 +128,9 @@ function buildViewerHtml(args: IViewerHtmlArgs): string {
 	<button id="wfm-cad-zoom-fit" class="wfm-cad-btn" title="回到全图（双击中键也可）">
 		<span class="codicon-like">⤢</span>
 	</button>
+	<button id="wfm-cad-refresh" class="wfm-cad-btn" title="销毁并重建 CAD 渲染（卡顿/异常时点这里恢复，比 Reload Window 快）">
+		<span class="codicon-like">⟳</span> 重载视图
+	</button>
 	<button id="wfm-cad-toggle-layers" class="wfm-cad-btn" title="图层">
 		图层
 	</button>
@@ -170,6 +173,59 @@ function detectFileKind(uri: URI): CadFileKind | undefined {
 	return undefined;
 }
 
+/**
+ * 扫 DXF 文本，给指定的 handle 集合算出 1-based 行范围（[startLine, endLine]）。
+ *
+ * DXF 行格式：交替的 group code / value 行。一个实体由 `0\n<TYPE>\n` 开头，
+ * 至下一个 `0\n` 之前结束。每个实体内部的 handle 用 group code `5` 标记：
+ * ```
+ *     0
+ * TEXT     ← entity 开头
+ *     5
+ * 3D1A6    ← handle
+ *     ...
+ *     0    ← 下一个 entity 开头（或 ENDSEC）
+ * ```
+ *
+ * 注意：
+ *  - group code 一般右对齐到 3 个字符宽（如 "  0"、"  5"），我们用 trim() 容错。
+ *  - 实体也可能出现在 BLOCKS/OBJECTS 段。本函数只关心 handle 匹配，不区分段。
+ *  - 找不到的 handle 不会出现在返回 Map 里，调用方据此判断是否兜底。
+ */
+export function findDxfEntityRanges(
+	dxfText: string,
+	wantedHandles: ReadonlySet<string>,
+): Map<string, { start: number; end: number }> {
+	const result = new Map<string, { start: number; end: number }>();
+	if (wantedHandles.size === 0 || !dxfText) {
+		return result;
+	}
+	const lines = dxfText.split(/\r?\n/);
+	let entityStartLine = -1;     // 当前实体起始的 0 所在行 (0-based)
+	let currentHandle: string | undefined;
+	for (let i = 0; i < lines.length; i++) {
+		const trimmed = lines[i].trim();
+		if (trimmed === '0') {
+			// 关上一个实体
+			if (currentHandle && wantedHandles.has(currentHandle) && entityStartLine >= 0 && !result.has(currentHandle)) {
+				result.set(currentHandle, { start: entityStartLine + 1, end: i });
+			}
+			entityStartLine = i;
+			currentHandle = undefined;
+		} else if (trimmed === '5' && i + 1 < lines.length && entityStartLine >= 0) {
+			const handle = lines[i + 1].trim().toUpperCase();
+			if (handle && wantedHandles.has(handle)) {
+				currentHandle = handle;
+			}
+		}
+	}
+	// 文件末尾仍未关闭的实体
+	if (currentHandle && wantedHandles.has(currentHandle) && entityStartLine >= 0 && !result.has(currentHandle)) {
+		result.set(currentHandle, { start: entityStartLine + 1, end: lines.length });
+	}
+	return result;
+}
+
 export class CadViewerEditor extends EditorPane {
 
 	static readonly ID = CAD_VIEWER_EDITOR_ID;
@@ -180,7 +236,24 @@ export class CadViewerEditor extends EditorPane {
 	private readonly webviewListeners = this._register(new DisposableStore());
 	private currentResourceUri: string | undefined;
 	private currentFileName: string | undefined;
+	private currentResource: URI | undefined;
+	private currentFileKind: CadFileKind | undefined;
 	private dimension: Dimension | undefined;
+
+	/** 当前文件的 IFileService 监听句柄（包含 watch() 注册 + onDidFilesChange listener）。
+	 *  切到下一个文件 / 关闭 editor 时自动 dispose，避免泄露监听。 */
+	private readonly fileWatcher = this._register(new MutableDisposable());
+	/** 文件变更触发的去抖 timer。多次 save 在 200ms 内只触发一次 reload。 */
+	private reloadDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+	/** 自写抑制窗口：viewer 内部删除实体 → main 写盘 → fs watch 会再发一遍变更。
+	 *  在窗口内（默认 1500ms）的文件变更事件直接忽略，防止把刚 push 给 webview
+	 *  的编辑状态又被磁盘版本覆盖回去。值是绝对时间戳（ms）。 */
+	private suppressWatchUntil = 0;
+	/** 防并发 reload：在一次 reload 完成前再次触发只重新计一次。 */
+	private reloadInFlight = false;
+
+	/** 防并发的 webview 重建——viewer 工具栏「重载视图」按钮点击会触发。 */
+	private rescueInFlight = false;
 
 	constructor(
 		group: IEditorGroup,
@@ -206,11 +279,53 @@ export class CadViewerEditor extends EditorPane {
 
 	protected override createEditor(parent: HTMLElement): void {
 		this.container = dom.append(parent, $('.wfm-cad-viewer-pane'));
+		this.container.style.position = 'relative';
 		this.statusEl = dom.append(this.container, $('.wfm-cad-viewer-loading'));
 		this.statusEl.textContent = localize('wfm.cad.viewer.loading', "正在加载 CAD 视图…");
 
 		// 实际的 webview 在 setInput 里按需挂载——这样切到下一个文件时
 		// 我们重用同一个 webview，省一次 ~6 MB bundle 重新解析的开销。
+	}
+
+	/**
+	 * 强制销毁现有 webview 并重新创建 + 重新发 load。
+	 *
+	 * viewer 工具栏「重载视图」按钮触发（webview → main 的 `reloadRequest`）。
+	 * 区别于既有 `pushLoadFromDisk`（只是再发一次字节，对死掉的 webview 没用），
+	 * 这里会把 IWebviewElement 整个扔掉，连同它 retain 的 6 MB cad-viewer
+	 * bundle 和 wasm 实例都 GC 掉，然后 ensureWebview() 重建。
+	 *
+	 * 注意：如果 webview 已经完全卡死，viewer 内按钮的 click 也派发不出来 →
+	 * 这条路径压根触发不了，用户只能 reload window。这是已知限制，按用户偏好
+	 * 不上 host-side 营救横幅，避免误报遮挡正常 toolbar。
+	 */
+	private async rescueReloadWebview(): Promise<void> {
+		if (this.rescueInFlight) {
+			return;
+		}
+		this.rescueInFlight = true;
+		this.logService.info(`${LOG_PREFIX} rescueReloadWebview (manual)`);
+		try {
+			this.webviewListeners.clear();
+			this.webview = undefined;
+			await new Promise<void>(r => setTimeout(r, 0));
+			this.ensureWebview();
+			if (!this.webview) {
+				throw new Error('ensureWebview() returned without creating webview');
+			}
+			if (this.currentResource) {
+				await this.pushLoadFromDisk('manual');
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			this.logService.error(`${LOG_PREFIX} rescue reload failed: ${message}`);
+			this.notificationService.notify({
+				severity: Severity.Error,
+				message: localize('wfm.cad.viewer.rescueFailed', "重建 CAD 视图失败: {0}。请关闭后重新打开文件。", message),
+			});
+		} finally {
+			this.rescueInFlight = false;
+		}
 	}
 
 	override async setInput(
@@ -248,10 +363,50 @@ export class CadViewerEditor extends EditorPane {
 		}
 
 		const fileName = input.getName();
+		this.currentResource = resource;
+		this.currentFileName = fileName;
+		this.currentResourceUri = resource.toString();
+		this.currentFileKind = fileKind;
 
+		this.ensureWebview();
+		if (!this.webview || !this.container) {
+			return;
+		}
+
+		// 装载 + 后续的自动刷新走同一条路径。
+		await this.pushLoadFromDisk('initial', token);
+		this.setupFileWatcher(resource);
+	}
+
+	/**
+	 * 读磁盘上的当前 CAD 文件，把字节通过 transferable 发到 webview。
+	 *
+	 * 复用场景：
+	 *  - `setInput` 首次打开 (`reason='initial'`)
+	 *  - 用户点 toolbar 刷新按钮 (`reason='manual'`)
+	 *  - 文件被外部改写、IFileService.watch 命中 (`reason='watch'`)
+	 *
+	 * 单飞：`reloadInFlight` 防止并发刷新堆积——若 watch 在 reload 进行中再次
+	 * 触发，会被去抖 timer 排到下一拍。
+	 */
+	private async pushLoadFromDisk(
+		reason: 'initial' | 'manual' | 'watch',
+		token?: CancellationToken,
+	): Promise<void> {
+		const resource = this.currentResource;
+		const fileName = this.currentFileName;
+		const fileKind = this.currentFileKind;
+		if (!resource || !fileName || !fileKind || !this.webview || !this.container) {
+			return;
+		}
+		if (this.reloadInFlight) {
+			this.logService.trace(`${LOG_PREFIX} skip reload (in-flight) reason=${reason}`);
+			return;
+		}
+		this.reloadInFlight = true;
 		try {
 			const stat = await this.fileService.stat(resource);
-			if (token.isCancellationRequested) {
+			if (token?.isCancellationRequested) {
 				return;
 			}
 			if (stat.size && stat.size > CAD_VIEWER_BYTE_LIMIT) {
@@ -267,18 +422,11 @@ export class CadViewerEditor extends EditorPane {
 				return;
 			}
 
-			this.ensureWebview();
-			if (!this.webview || !this.container) {
-				return;
-			}
-
 			const content = await this.fileService.readFile(resource);
-			if (token.isCancellationRequested) {
+			if (token?.isCancellationRequested) {
 				return;
 			}
 
-			this.currentResourceUri = resource.toString();
-			this.currentFileName = fileName;
 			this.hideStatus();
 
 			const isDark = this.themeService.getColorTheme().type === ColorScheme.DARK
@@ -286,21 +434,21 @@ export class CadViewerEditor extends EditorPane {
 
 			const loadMessage: ICadLoadMessage = {
 				kind: 'load',
-				uri: this.currentResourceUri,
+				uri: resource.toString(),
 				fileName,
 				fileKind,
 				isDark,
 			};
 
-			// 把字节通过 transferable 转移到 webview，避免拷贝。
 			const buffer = (content.value.buffer as Uint8Array).slice().buffer;
 			await this.webview.postMessage(
 				{ ...loadMessage, bytes: buffer } as ICadLoadMessage & { bytes: ArrayBuffer },
 				[buffer],
 			);
+			this.logService.trace(`${LOG_PREFIX} reload ok reason=${reason} bytes=${buffer.byteLength}`);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
-			this.logService.warn(`${LOG_PREFIX} setInput failed: ${message}`);
+			this.logService.warn(`${LOG_PREFIX} pushLoadFromDisk failed (${reason}): ${message}`);
 			this.showStatus(
 				localize(
 					'wfm.cad.viewer.readFailed',
@@ -309,7 +457,40 @@ export class CadViewerEditor extends EditorPane {
 				),
 				/*isError*/ true,
 			);
+		} finally {
+			this.reloadInFlight = false;
 		}
+	}
+
+	/**
+	 * 监听磁盘上的当前 CAD 文件，外部改写时自动刷新画布。
+	 *
+	 *  - `IFileService.watch(resource)` 注册操作系统级 watcher；
+	 *  - `onDidFilesChange` 是工作区级别的聚合事件，需要用 `affects()` 过滤；
+	 *  - 200ms 去抖：保存动作经常触发多次（先 truncate 再写入）；
+	 *  - `suppressWatchUntil` 抑制窗：viewer 自己 `editsApplied` 后会马上 writeFile，
+	 *    1.5s 内不要把这次自写回环成 watch reload。
+	 */
+	private setupFileWatcher(resource: URI): void {
+		const watcherStore = new DisposableStore();
+		watcherStore.add(this.fileService.watch(resource));
+		watcherStore.add(this.fileService.onDidFilesChange(e => {
+			if (!e.affects(resource)) {
+				return;
+			}
+			if (Date.now() < this.suppressWatchUntil) {
+				this.logService.trace(`${LOG_PREFIX} fs change suppressed (self-write window)`);
+				return;
+			}
+			if (this.reloadDebounceTimer) {
+				clearTimeout(this.reloadDebounceTimer);
+			}
+			this.reloadDebounceTimer = setTimeout(() => {
+				this.reloadDebounceTimer = undefined;
+				void this.pushLoadFromDisk('watch');
+			}, 200);
+		}));
+		this.fileWatcher.value = watcherStore;
 	}
 
 	private ensureWebview(): void {
@@ -407,6 +588,11 @@ export class CadViewerEditor extends EditorPane {
 				break;
 			case 'editsApplied':
 				this.handleEditsApplied(msg.dxfText, msg.sourceUri);
+				break;
+			case 'reloadRequest':
+				// 工具栏「重载视图」按钮：销毁并重建 webview。重的，但只在用户
+				// 明确点的时候做，正常使用没有自动监测，所以不会误触。
+				void this.rescueReloadWebview();
 				break;
 		}
 	}
@@ -527,6 +713,13 @@ export class CadViewerEditor extends EditorPane {
 	override clearInput(): void {
 		this.currentResourceUri = undefined;
 		this.currentFileName = undefined;
+		this.currentResource = undefined;
+		this.currentFileKind = undefined;
+		this.fileWatcher.clear();
+		if (this.reloadDebounceTimer) {
+			clearTimeout(this.reloadDebounceTimer);
+			this.reloadDebounceTimer = undefined;
+		}
 		// 不销毁 webview：retainContextWhenHidden=true，下次 setInput 直接 reuse。
 		super.clearInput();
 	}
@@ -544,6 +737,10 @@ export class CadViewerEditor extends EditorPane {
 	}
 
 	override dispose(): void {
+		if (this.reloadDebounceTimer) {
+			clearTimeout(this.reloadDebounceTimer);
+			this.reloadDebounceTimer = undefined;
+		}
 		this.webview = undefined;
 		super.dispose();
 	}
@@ -563,15 +760,64 @@ export class CadViewerEditor extends EditorPane {
 			return;
 		}
 		widget.focusInput();
-		widget.attachmentModel.addFile(URI.parse(sourceUri));
-		const summary = entities
-			.slice(0, 50)
-			.map(e => `- ${e.entityType} (handle=${e.handle}, layer=${e.layer}${e.textContent ? `, text="${e.textContent}"` : ''})`)
-			.join('\n');
-		widget.setInput(
-			`已选中 ${entities.length} 个 CAD 实体（来自 ${fileName}），请基于这些实体处理。\n\n` +
-			(entities.length > 50 ? `前 50 个实体：\n${summary}\n…（共 ${entities.length} 个）` : summary),
-		);
+
+		const fileUri = URI.parse(sourceUri);
+		const isDxf = /\.dxf$/i.test(fileName);
+
+		// 仅 DXF 是文本文件，能扫出每个 handle 在原文中的行范围。DWG 是二进制，
+		// 行号无意义，退回到"只附文件 + 单条提示"。
+		let ranges: Map<string, { start: number; end: number }> | undefined;
+		if (isDxf) {
+			try {
+				const content = await this.fileService.readFile(fileUri);
+				const dxfText = content.value.toString();
+				const wantedHandles = new Set(entities.map(e => e.handle.toUpperCase()).filter(h => h.length > 0));
+				ranges = findDxfEntityRanges(dxfText, wantedHandles);
+			} catch (err) {
+				this.logService.warn(`${LOG_PREFIX} read dxf for ranges failed: ${err instanceof Error ? err.message : String(err)}`);
+			}
+		}
+
+		// 准备 chip：≤ 10 个实体一条 chip 一条；> 10 个合并为一个 bounding range chip，避免输入区被刷屏。
+		const MAX_PER_CHIP = 10;
+		const matched = entities
+			.map(e => ({ entity: e, range: ranges?.get(e.handle.toUpperCase()) }))
+			.filter(it => !!it.range) as Array<{ entity: typeof entities[number]; range: { start: number; end: number } }>;
+
+		if (matched.length === 0) {
+			// 无法定位行号：单纯附文件，让用户继续写自然语言要求即可。
+			widget.attachmentModel.addFile(fileUri);
+			this.notificationService.notify({
+				severity: Severity.Info,
+				message: localize(
+					'wfm.cad.viewer.noRange',
+					"已附加文件 {0}。当前 {1} 是二进制或无法解析 handle 行号，未生成行级引用。",
+					fileName, isDxf ? '选区' : '文件',
+				),
+			});
+			return;
+		}
+
+		if (matched.length <= MAX_PER_CHIP) {
+			for (const m of matched) {
+				widget.attachmentModel.addFile(fileUri, {
+					startLineNumber: m.range.start,
+					startColumn: 1,
+					endLineNumber: m.range.end,
+					endColumn: 1,
+				});
+			}
+		} else {
+			// 合并：min..max 包络。
+			const startLine = matched.reduce((a, b) => Math.min(a, b.range.start), Number.POSITIVE_INFINITY);
+			const endLine = matched.reduce((a, b) => Math.max(a, b.range.end), 0);
+			widget.attachmentModel.addFile(fileUri, {
+				startLineNumber: startLine,
+				startColumn: 1,
+				endLineNumber: endLine,
+				endColumn: 1,
+			});
+		}
 	}
 
 	private async handleEditsApplied(dxfText: string, sourceUri: string): Promise<void> {
@@ -580,6 +826,9 @@ export class CadViewerEditor extends EditorPane {
 		}
 		try {
 			const uri = URI.parse(sourceUri);
+			// 关掉自写引发的 watch reload：viewer 内的删除/改色已经在画布上生效，
+			// 没必要再把磁盘版本回灌一次（会丢失后续的 in-memory 选区状态）。
+			this.suppressWatchUntil = Date.now() + 1500;
 			await this.fileService.writeFile(uri, VSBuffer.fromString(dxfText));
 			this.logService.info(`${LOG_PREFIX} saved modified DXF: ${sourceUri}`);
 		} catch (err) {

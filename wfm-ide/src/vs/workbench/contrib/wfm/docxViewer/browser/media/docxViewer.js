@@ -14,6 +14,14 @@
 	var loadingEl = document.getElementById('wfm-docx-loading');
 	var toolbar = document.getElementById('wfm-selection-toolbar');
 	var sendBtn = document.getElementById('wfm-send-selection');
+	var ctxMenu = document.getElementById('wfm-docx-ctx-menu');
+	var refreshBtn = document.getElementById('wfm-docx-refresh');
+
+	if (refreshBtn) {
+		refreshBtn.addEventListener('click', function () {
+			postMain({ kind: 'reloadRequest' });
+		});
+	}
 
 	var RENDER_TIMEOUT_MS = 60000;
 	var renderTimer = null;
@@ -126,21 +134,78 @@
 		}
 	});
 
+	function sendCurrentSelection() {
+		var data = resolveSelection();
+		if (data) {
+			postMain({
+				kind: 'selectionToChat',
+				startPara: data.startPara,
+				endPara: data.endPara,
+				selectedText: data.selectedText
+			});
+		}
+		hideToolbar();
+		hideContextMenu();
+		var sel = window.getSelection();
+		if (sel) { sel.removeAllRanges(); }
+	}
+
 	if (sendBtn) {
 		sendBtn.addEventListener('click', function (e) {
 			e.preventDefault();
 			e.stopPropagation();
-			var data = resolveSelection();
-			if (data) {
-				postMain({
-					kind: 'selectionToChat',
-					startPara: data.startPara,
-					endPara: data.endPara,
-					selectedText: data.selectedText
-				});
+			sendCurrentSelection();
+		});
+	}
+
+	// ── Right-click context menu ────────────────────────────────
+
+	function showContextMenu(x, y) {
+		if (!ctxMenu) { return; }
+		var data = resolveSelection();
+		if (!data) { return; }
+		ctxMenu.hidden = false;
+		// Position with viewport clamping
+		var vw = window.innerWidth;
+		var vh = window.innerHeight;
+		var rect = ctxMenu.getBoundingClientRect();
+		ctxMenu.style.left = Math.min(x, vw - rect.width - 4) + 'px';
+		ctxMenu.style.top = Math.min(y, vh - rect.height - 4) + 'px';
+	}
+
+	function hideContextMenu() {
+		if (ctxMenu) { ctxMenu.hidden = true; }
+	}
+
+	document.addEventListener('contextmenu', function (e) {
+		// 只有当存在文字选区时才接管右键。无选区放行（保留浏览器/webview 默认行为）。
+		var sel = window.getSelection();
+		if (!sel || sel.isCollapsed) { return; }
+		var data = resolveSelection();
+		if (!data) { return; }
+		e.preventDefault();
+		showContextMenu(e.clientX, e.clientY);
+		hideToolbar();
+	});
+
+	document.addEventListener('mousedown', function (e) {
+		if (ctxMenu && !ctxMenu.hidden && !ctxMenu.contains(e.target)) {
+			hideContextMenu();
+		}
+	}, true);
+
+	document.addEventListener('scroll', function () { hideContextMenu(); }, true);
+	window.addEventListener('blur', function () { hideContextMenu(); });
+
+	if (ctxMenu) {
+		ctxMenu.addEventListener('click', function (e) {
+			var target = e.target;
+			var item = target && target.closest ? target.closest('.wfm-docx-ctx-item') : null;
+			if (!item) { return; }
+			var action = item.getAttribute('data-action');
+			if (action === 'send-selection') {
+				sendCurrentSelection();
 			}
-			hideToolbar();
-			window.getSelection().removeAllRanges();
 		});
 	}
 
@@ -182,7 +247,11 @@
 						if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
 						if (loadingEl) { loadingEl.style.display = 'none'; }
 						injectParagraphIndices();
+						// 显式上报"渲染完成"——main 端 watchdog 等的就是这个，
+						// 仅靠 `ready`（脚本加载即触发）区分不出"渲染卡死"。
+						postMain({ kind: 'rendered' });
 					}).catch(function (err) {
+						postMain({ kind: 'error', message: '渲染失败: ' + (err && err.message ? err.message : err) });
 						showError('渲染失败: ' + (err.message || err));
 					});
 				} else {

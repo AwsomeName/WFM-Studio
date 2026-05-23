@@ -27,6 +27,7 @@ import { IEditorOptions } from '../../../../../platform/editor/common/editor.js'
 import { IEditorGroup } from '../../../../services/editor/common/editorGroupsService.js';
 import { IWebviewElement, IWebviewService } from '../../../webview/browser/webview.js';
 import { asWebviewUri } from '../../../webview/common/webview.js';
+import { URI } from '../../../../../base/common/uri.js';
 import { ChatViewId, IChatWidgetService } from '../../../chat/browser/chat.js';
 import { ChatAgentLocation } from '../../../chat/common/constants.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
@@ -37,7 +38,6 @@ import {
 } from '../common/docxViewer.js';
 import { DocxViewerEditorInput } from './docxViewerEditorInput.js';
 import { DocxWebviewToMainMessage, IDocxLoadMessage } from './docxViewerMessages.js';
-import { createDocumentReference } from './docxSelectionHelper.js';
 import { webviewGenericCspSource } from '../../../webview/common/webview.js';
 
 const $ = dom.$;
@@ -78,11 +78,17 @@ function buildViewerHtml(args: IViewerHtmlArgs): string {
 <title>WFM Word 预览</title>
 </head>
 <body>
-<div id="wfm-docx-toolbar"><span id="wfm-docx-filename"></span></div>
+<div id="wfm-docx-toolbar">
+	<span id="wfm-docx-filename"></span>
+	<button id="wfm-docx-refresh" class="wfm-docx-btn" title="销毁并重建 Word 渲染（卡顿/异常时点这里恢复，比 Reload Window 快）">⟳ 重载视图</button>
+</div>
 <div id="wfm-docx-loading">正在渲染文档…</div>
 <div id="wfm-docx-container"></div>
 <div id="wfm-selection-toolbar">
 	<button id="wfm-send-selection">发送到对话</button>
+</div>
+<div id="wfm-docx-ctx-menu" hidden>
+	<div class="wfm-docx-ctx-item" data-action="send-selection">发送选中到对话</div>
 </div>
 <div id="wfm-docx-error"></div>
 <script nonce="${nonce}" src="${jsZipUri}"></script>
@@ -102,6 +108,9 @@ export class DocxViewerEditor extends EditorPane {
 	private readonly webviewListeners = this._register(new DisposableStore());
 	private currentResource: string | undefined;
 	private currentFileName: string | undefined;
+
+	/** 防并发的 webview 重建——viewer 工具栏「重载视图」按钮点击会触发。 */
+	private rescueInFlight = false;
 
 	constructor(
 		group: IEditorGroup,
@@ -127,8 +136,57 @@ export class DocxViewerEditor extends EditorPane {
 
 	protected override createEditor(parent: HTMLElement): void {
 		this.container = dom.append(parent, $('.wfm-docx-viewer-pane'));
+		this.container.style.position = 'relative';
 		this.statusEl = dom.append(this.container, $('.wfm-docx-viewer-loading'));
 		this.statusEl.textContent = localize('wfm.docx.viewer.loading', "正在加载 Word 视图…");
+	}
+
+	/**
+	 * 销毁现有 webview 并重新创建 + 重新发 load。
+	 *
+	 * 由 viewer 工具栏「重载视图」按钮触发（webview → main 的 `reloadRequest`）。
+	 * 如果 webview 已完全卡死、in-webview 按钮点不到，这条路径触发不了，用户
+	 * 需要 reload window。这是已知限制，按用户偏好不上 host-side 营救横幅。
+	 */
+	private async rescueReloadWebview(): Promise<void> {
+		if (this.rescueInFlight) { return; }
+		this.rescueInFlight = true;
+		this.logService.info(`${LOG_PREFIX} rescueReloadWebview (manual)`);
+		try {
+			this.webviewListeners.clear();
+			this.webview = undefined;
+			await new Promise<void>(r => setTimeout(r, 0));
+			this.ensureWebview();
+			if (!this.webview) {
+				throw new Error('ensureWebview() returned without creating webview');
+			}
+			if (this.currentResource && this.currentFileName) {
+				await this.pushCurrentResourceToWebview();
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			this.logService.error(`${LOG_PREFIX} rescue reload failed: ${message}`);
+			this.notificationService.notify({
+				severity: Severity.Error,
+				message: localize('wfm.docx.viewer.rescueFailed', "重建 Word 视图失败: {0}。请关闭后重新打开文件。", message),
+			});
+		} finally {
+			this.rescueInFlight = false;
+		}
+	}
+
+	/** 把 `currentResource` 的字节读出来 post 给 webview。供 setInput 和 rescue 复用。 */
+	private async pushCurrentResourceToWebview(): Promise<void> {
+		if (!this.webview || !this.currentResource || !this.currentFileName) { return; }
+		const uri = URI.parse(this.currentResource);
+		const content = await this.fileService.readFile(uri);
+		const isDark = this.themeService.getColorTheme().type === ColorScheme.DARK
+			|| this.themeService.getColorTheme().type === ColorScheme.HIGH_CONTRAST_DARK;
+		const buffer = (content.value.buffer as Uint8Array).slice().buffer;
+		await this.webview.postMessage(
+			{ kind: 'load', fileName: this.currentFileName, isDark, bytes: buffer } as IDocxLoadMessage & { bytes: ArrayBuffer },
+			[buffer],
+		);
 	}
 
 	override async setInput(
@@ -175,21 +233,12 @@ export class DocxViewerEditor extends EditorPane {
 			this.ensureWebview();
 			if (!this.webview || !this.container) { return; }
 
-			const content = await this.fileService.readFile(resource);
-			if (token.isCancellationRequested) { return; }
-
 			this.currentResource = resource.toString();
 			this.currentFileName = input.getName();
 			this.hideStatus();
 
-			const isDark = this.themeService.getColorTheme().type === ColorScheme.DARK
-				|| this.themeService.getColorTheme().type === ColorScheme.HIGH_CONTRAST_DARK;
-
-			const buffer = (content.value.buffer as Uint8Array).slice().buffer;
-			await this.webview.postMessage(
-				{ kind: 'load', fileName: input.getName(), isDark, bytes: buffer } as IDocxLoadMessage & { bytes: ArrayBuffer },
-				[buffer],
-			);
+			await this.pushCurrentResourceToWebview();
+			if (token.isCancellationRequested) { return; }
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			this.logService.warn(`${LOG_PREFIX} setInput failed: ${message}`);
@@ -242,7 +291,10 @@ export class DocxViewerEditor extends EditorPane {
 		if (!msg || typeof msg !== 'object' || typeof msg.kind !== 'string') { return; }
 		switch (msg.kind) {
 			case 'ready':
-				this.logService.trace(`${LOG_PREFIX} webview ready`);
+				this.logService.trace(`${LOG_PREFIX} webview script ready`);
+				break;
+			case 'rendered':
+				this.logService.trace(`${LOG_PREFIX} docx rendered`);
 				break;
 			case 'error':
 				this.logService.warn(`${LOG_PREFIX} webview error: ${msg.message}`);
@@ -254,6 +306,9 @@ export class DocxViewerEditor extends EditorPane {
 			case 'selectionToChat':
 				this.handleSelectionToChat(msg.startPara, msg.endPara, msg.selectedText);
 				break;
+			case 'reloadRequest':
+				void this.rescueReloadWebview();
+				break;
 		}
 	}
 
@@ -262,11 +317,11 @@ export class DocxViewerEditor extends EditorPane {
 			this.logService.warn(`${LOG_PREFIX} selectionToChat but no current file`);
 			return;
 		}
-		const ref = createDocumentReference(
-			this.currentFileName,
-			this.currentResource,
-			{ startPara, endPara, selectedText },
-		);
+		// selectedText 暂时不用（chip 已经携带文件 URI + 段落范围；agent 通过
+		// docx 工具按段落 index 回取即可）。保留参数签名以便后续扩展（例如离线
+		// 直接附带选区原文做"无工具兜底"）。
+		void selectedText;
+
 		await this.viewsService.openView(ChatViewId, true);
 		const widget = this.chatWidgetService.getWidgetsByLocations(ChatAgentLocation.Chat)[0]
 			?? this.chatWidgetService.lastFocusedWidget;
@@ -274,7 +329,20 @@ export class DocxViewerEditor extends EditorPane {
 			return;
 		}
 		widget.focusInput();
-		widget.setInput(`[文档: ${ref.displayLabel}]\n${ref.selectedText}`);
+
+		// 用段落 index 作"行号"塞进 IRange —— chip 自然渲染成 "文件名:3-5"。
+		// docx 是二进制 zip，agent 端会通过 _stitchAttachments 的特判把行号翻译成
+		// "第 3-5 段"语义（见 wfmClaudeAgent.contribution.ts）。
+		try {
+			widget.attachmentModel.addFile(URI.parse(this.currentResource), {
+				startLineNumber: startPara + 1,
+				startColumn: 1,
+				endLineNumber: endPara + 1,
+				endColumn: 1,
+			});
+		} catch (err) {
+			this.logService.warn(`${LOG_PREFIX} addFile failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	private showStatus(message: string, isError: boolean): void {

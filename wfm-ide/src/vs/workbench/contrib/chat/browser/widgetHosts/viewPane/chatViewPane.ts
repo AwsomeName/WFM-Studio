@@ -325,10 +325,15 @@ export class ChatViewPane extends ViewPane implements IViewWelcomeDelegate {
 
 	//#region Sessions Control
 
-	private static readonly SESSIONS_SIDEBAR_MIN_WIDTH = 200;
+	// WFM patch: 上游默认 SIDEBAR_MIN=200 / SIDEBAR_DEFAULT=300 / WIDGET_DEFAULT=300
+	// 导致 SideBySide 布局需要 chat 面板 >= 600px 才会启用，否则强制回退 Stacked
+	// （SESSIONS 列表只有 chat 空时才出来）。WFM 希望即便在中等宽度也常驻 SESSIONS
+	// 列表（"多会话并排可见"是用户硬需求），把阈值压到 400px：sidebar 最低 150 /
+	// 默认 180 / chat 最低保留 220。
+	private static readonly SESSIONS_SIDEBAR_MIN_WIDTH = 150;
 	private static readonly SESSIONS_SIDEBAR_SNAP_THRESHOLD = this.SESSIONS_SIDEBAR_MIN_WIDTH / 2; // snap to hide when dragged below half of minimum width
-	private static readonly SESSIONS_SIDEBAR_DEFAULT_WIDTH = 300;
-	private static readonly CHAT_WIDGET_DEFAULT_WIDTH = 300;
+	private static readonly SESSIONS_SIDEBAR_DEFAULT_WIDTH = 180;
+	private static readonly CHAT_WIDGET_DEFAULT_WIDTH = 220;
 	private static readonly SESSIONS_SIDEBAR_VIEW_MIN_WIDTH = this.CHAT_WIDGET_DEFAULT_WIDTH + this.SESSIONS_SIDEBAR_DEFAULT_WIDTH;
 
 	private sessionsContainer: HTMLElement | undefined;

@@ -105,6 +105,14 @@ export interface ICadEditsAppliedMessage {
 	readonly sourceUri: string;
 }
 
+/**
+ * viewer 工具栏「刷新」按钮触发，让 main 重读磁盘上的当前文件并重新 push 'load'。
+ * 文件被外部工具（AutoCAD、SolidWorks 导出等）改写后，用户点这个按钮拿到最新内容。
+ */
+export interface ICadReloadRequestMessage {
+	readonly kind: 'reloadRequest';
+}
+
 export type CadWebviewToMainMessage =
 	| ICadReadyMessage
 	| ICadErrorMessage
@@ -113,4 +121,5 @@ export type CadWebviewToMainMessage =
 	| ICadMissingDataMessage
 	| ICadDebugMessage
 	| ICadSendSelectionMessage
-	| ICadEditsAppliedMessage;
+	| ICadEditsAppliedMessage
+	| ICadReloadRequestMessage;

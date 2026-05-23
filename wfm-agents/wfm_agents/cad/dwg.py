@@ -46,6 +46,7 @@ def resolve_cad_file(path: Path) -> Path:
 def _dwg_to_dxf_via_ezdxf(dwg_path: Path) -> Path:
     """ezdxf recover 模式转换 DWG → DXF（零外部依赖）。"""
     import ezdxf  # noqa: PLC0415
+    from ezdxf import recover  # noqa: PLC0415
 
     tmp = tempfile.NamedTemporaryFile(
         suffix=".dxf",
@@ -54,7 +55,7 @@ def _dwg_to_dxf_via_ezdxf(dwg_path: Path) -> Path:
     )
     tmp.close()
     try:
-        doc, _ = ezdxf.recover.readfile(str(dwg_path))
+        doc, _ = recover.readfile(str(dwg_path))
         doc.saveas(tmp.name)
     except BaseException:
         # 清理失败产物
@@ -110,7 +111,9 @@ def _dwg_to_dxf_via_libredwg(dwg_path: Path) -> Path:
     tmp.close()
     try:
         subprocess.run(
-            [cli, str(dwg_path), "-o", tmp.name],
+            # ``-y`` 强制覆盖：NamedTemporaryFile 先建了空文件，否则 dwg2dxf
+            # 报 "File not overwritten" 并不写入。
+            [cli, "-y", str(dwg_path), "-o", tmp.name],
             check=True,
             capture_output=True,
             text=True,

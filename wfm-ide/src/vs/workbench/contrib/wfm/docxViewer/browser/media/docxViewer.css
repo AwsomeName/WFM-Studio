@@ -9,12 +9,27 @@ body.is-dark { background: #252526; color: #ccc; }
 
 #wfm-docx-toolbar {
 	position: sticky; top: 0; z-index: 10;
-	height: 32px; display: flex; align-items: center;
+	height: 32px; display: flex; align-items: center; gap: 8px;
 	padding: 0 12px; border-bottom: 1px solid #e0e0e0;
 	background: #fff; font-size: 12px;
 }
 body.is-dark #wfm-docx-toolbar { background: #1e1e1e; border-bottom-color: #404040; }
-#wfm-docx-filename { opacity: 0.7; }
+#wfm-docx-filename { flex: 1 1 auto; opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.wfm-docx-btn {
+	flex: 0 0 auto;
+	padding: 3px 10px;
+	border-radius: 3px;
+	border: 1px solid rgba(0, 0, 0, 0.12);
+	background: transparent;
+	color: inherit;
+	cursor: pointer;
+	font-size: 12px;
+	line-height: 1.4;
+}
+.wfm-docx-btn:hover { background: rgba(0, 0, 0, 0.06); }
+body.is-dark .wfm-docx-btn { border-color: rgba(255, 255, 255, 0.18); }
+body.is-dark .wfm-docx-btn:hover { background: rgba(255, 255, 255, 0.08); }
 
 #wfm-docx-container {
 	padding: 24px 40px;
@@ -71,4 +86,43 @@ body.is-dark #wfm-selection-toolbar button { color: #4fc3f7; }
 
 #wfm-selection-toolbar button:hover {
 	background: rgba(0, 120, 212, 0.1);
+}
+
+/* ── Right-click context menu ─────────────────────────────── */
+
+#wfm-docx-ctx-menu {
+	position: fixed;
+	z-index: 1100;
+	min-width: 180px;
+	padding: 4px 0;
+	background: #ffffff;
+	color: #1f1f1f;
+	border: 1px solid rgba(0, 0, 0, 0.12);
+	border-radius: 4px;
+	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+	font-size: 13px;
+	user-select: none;
+}
+
+body.is-dark #wfm-docx-ctx-menu {
+	background: #2b2b2b;
+	color: #f3f3f3;
+	border-color: rgba(255, 255, 255, 0.1);
+	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+
+.wfm-docx-ctx-item {
+	padding: 6px 16px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.wfm-docx-ctx-item:hover {
+	background: #e3effa;
+	color: #0a3a72;
+}
+
+body.is-dark .wfm-docx-ctx-item:hover {
+	background: #094771;
+	color: #ffffff;
 }
