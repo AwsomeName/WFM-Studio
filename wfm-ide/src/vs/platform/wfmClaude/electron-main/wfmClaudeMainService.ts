@@ -7,7 +7,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ChildProcess, spawn } from 'node:child_process';
+import { Buffer } from 'node:buffer';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
@@ -15,21 +17,30 @@ import { ILogService } from '../../log/common/log.js';
 import { IEnvironmentMainService } from '../../environment/electron-main/environmentMainService.js';
 import {
 	IWfmClaudeEvent,
+	IWfmClaudeImageAttachment,
 	IWfmClaudeRunOptions,
 	IWfmClaudeService,
 } from '../common/wfmClaude.js';
+import { IPCServer } from '../../../base/parts/ipc/common/ipc.js';
+import { BrowserApiServer } from './browserApiServer.js';
 
 interface IActiveTurn {
 	readonly turnId: string;
 	readonly process: ChildProcess;
+	/** Per-turn temp dir holding materialised image attachments. Removed on exit. */
+	readonly tempDir?: string;
 	stopped: boolean;
 }
 
 /** Claude Code stream-json system prompt. Kept minimal; CAD/DOCX guidance lives in MCP tool descriptions. */
 const SYSTEM_PROMPT = [
 	"You are WFM Studio's AI assistant. You have access to WFM-specific MCP tools",
-	"(prefixed with mcp__wfm__) for reading/writing workspace files and inspecting CAD",
-	"drawings (DXF/DWG).",
+	"(prefixed with mcp__wfm__) for reading/writing workspace files, inspecting CAD",
+	"drawings (DXF/DWG), and interacting with web pages through the integrated browser.",
+	'',
+	"Browser tools (mcp__wfm__browser_*) let you open URLs, read page content, click",
+	"elements, type text, take screenshots, and navigate. Use them when users ask you",
+	"to interact with websites.",
 	'',
 	"Always respond in the same language the user writes in (Chinese or English).",
 ].join('\n');
@@ -42,17 +53,31 @@ export class WfmClaudeMainService extends Disposable implements IWfmClaudeServic
 	readonly onEvent: Event<IWfmClaudeEvent> = this._onEvent.event;
 
 	private readonly _turns = new Map<string, IActiveTurn>();
+	private readonly _browserApiServer: BrowserApiServer;
 
 	constructor(
 		@ILogService private readonly logService: ILogService,
 		@IEnvironmentMainService private readonly environmentMainService: IEnvironmentMainService,
 	) {
 		super();
+		this._browserApiServer = this._register(new BrowserApiServer(logService));
+		this._browserApiServer.start().catch(err =>
+			this.logService.warn(`[wfm-claude] browser API server failed to start: ${(err as Error).message}`)
+		);
 		this._register(toDisposable(() => this._killAll()));
 	}
 
+	/**
+	 * Wire the browser API server up to the renderer-side `BrowserBridgeService`
+	 * via the main process IPC server. Called once from `app.ts` after the
+	 * main IPC server is constructed.
+	 */
+	attachIpcServer(ipcServer: IPCServer<string>): void {
+		this._browserApiServer.attachIpcServer(ipcServer);
+	}
+
 	async runTurn(options: IWfmClaudeRunOptions): Promise<void> {
-		const { turnId, prompt, workspaceRoot } = options;
+		const { turnId, workspaceRoot } = options;
 
 		if (this._turns.has(turnId)) {
 			throw new Error(`[wfm-claude] turnId already active: ${turnId}`);
@@ -61,6 +86,12 @@ export class WfmClaudeMainService extends Disposable implements IWfmClaudeServic
 		if (!fs.existsSync(workspaceRoot)) {
 			throw new Error(`[wfm-claude] workspaceRoot does not exist: ${workspaceRoot}`);
 		}
+
+		// Materialise inline image attachments to a per-turn temp dir and
+		// prepend `@<path>` refs so claude actually sees them. Without this,
+		// pasted images are silently dropped (the IChatRequestVariableEntry
+		// of kind 'image' carries raw bytes that can't go through the CLI).
+		const { prompt, tempDir } = this._stitchInlineImages(turnId, options.prompt, options.images);
 
 		const model = options.model || process.env.WFM_CLAUDE_MODEL || 'sonnet';
 		const mcpConfigJson = this._buildMcpConfigJson(workspaceRoot, options.cadSourceUri);
@@ -80,7 +111,8 @@ export class WfmClaudeMainService extends Disposable implements IWfmClaudeServic
 
 		this.logService.info(
 			`[wfm-claude] spawning claude (turnId=${turnId}, model=${model}, ` +
-			`resume=${options.sessionId ?? '-'}, cwd=${workspaceRoot})`,
+			`resume=${options.sessionId ?? '-'}, cwd=${workspaceRoot}, ` +
+			`images=${options.images?.length ?? 0})`,
 		);
 
 		let child: ChildProcess;
@@ -91,10 +123,13 @@ export class WfmClaudeMainService extends Disposable implements IWfmClaudeServic
 				stdio: ['ignore', 'pipe', 'pipe'],
 			});
 		} catch (err) {
+			if (tempDir) {
+				this._removeTempDir(tempDir);
+			}
 			throw new Error(`[wfm-claude] failed to spawn 'claude' (is it on PATH?): ${(err as Error).message}`);
 		}
 
-		const turn: IActiveTurn = { turnId, process: child, stopped: false };
+		const turn: IActiveTurn = { turnId, process: child, tempDir, stopped: false };
 		this._turns.set(turnId, turn);
 
 		this._wireStdout(turn, options.cadSourceUri);
@@ -124,10 +159,143 @@ export class WfmClaudeMainService extends Disposable implements IWfmClaudeServic
 
 	// ── private helpers ─────────────────────────────────────────────────
 
+	/**
+	 * Write each inline image to `<os.tmpdir()>/wfm-claude/<turnId>/img-N.<ext>`
+	 * and return a new prompt with `@<abs-path>` refs prepended. Returns the
+	 * original prompt (and no tempDir) if there are no images.
+	 *
+	 * We do NOT delete the temp files inline — claude needs them at least until
+	 * the model has read them. Cleanup happens on process exit (see _wireExit).
+	 */
+	private _stitchInlineImages(
+		turnId: string,
+		prompt: string,
+		images: ReadonlyArray<IWfmClaudeImageAttachment> | undefined,
+	): { prompt: string; tempDir: string | undefined } {
+		if (!images || images.length === 0) {
+			return { prompt, tempDir: undefined };
+		}
+
+		const tempDir = path.join(os.tmpdir(), 'wfm-claude', turnId);
+		try {
+			fs.mkdirSync(tempDir, { recursive: true });
+		} catch (err) {
+			this.logService.warn(`[wfm-claude] mkdir temp dir failed (${tempDir}): ${(err as Error).message}`);
+			return { prompt, tempDir: undefined };
+		}
+
+		const refs: string[] = [];
+		images.forEach((img, idx) => {
+			const bytes = this._decodeImageBytes(img);
+			if (!bytes) {
+				this.logService.warn(`[wfm-claude] image attachment ${idx} has no usable bytes (dataBase64 length=${img.dataBase64?.length ?? 0})`);
+				return;
+			}
+			const ext = this._extensionForImage(img, bytes);
+			const filename = `img-${idx + 1}${ext}`;
+			const absPath = path.join(tempDir, filename);
+			try {
+				fs.writeFileSync(absPath, bytes);
+				const quoted = /\s/.test(absPath) ? `"${absPath}"` : absPath;
+				refs.push(`@${quoted}`);
+			} catch (err) {
+				this.logService.warn(`[wfm-claude] failed to write image attachment ${idx}: ${(err as Error).message}`);
+			}
+		});
+
+		if (refs.length === 0) {
+			this._removeTempDir(tempDir);
+			return { prompt, tempDir: undefined };
+		}
+
+		const head = refs.join(' ');
+		return { prompt: prompt.length ? `${head}\n\n${prompt}` : head, tempDir };
+	}
+
+	/**
+	 * Decode the base64 payload that crossed IPC back into raw bytes.
+	 *
+	 * Returns `undefined` when the payload is missing or malformed so the
+	 * caller can skip the attachment instead of crashing the whole turn.
+	 */
+	private _decodeImageBytes(img: IWfmClaudeImageAttachment): Buffer | undefined {
+		if (!img.dataBase64 || typeof img.dataBase64 !== 'string') {
+			return undefined;
+		}
+		try {
+			const buf = Buffer.from(img.dataBase64, 'base64');
+			return buf.length > 0 ? buf : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	private _extensionForImage(img: IWfmClaudeImageAttachment, bytes: Buffer): string {
+		const mime = (img.mimeType ?? '').toLowerCase();
+		switch (mime) {
+			case 'image/png': return '.png';
+			case 'image/jpeg':
+			case 'image/jpg': return '.jpg';
+			case 'image/gif': return '.gif';
+			case 'image/webp': return '.webp';
+			case 'image/bmp': return '.bmp';
+			case 'image/svg+xml': return '.svg';
+		}
+		// Fall back to detecting from the byte magic number (covers pastes
+		// where the upstream attachment didn't carry a mimeType).
+		const detected = this._detectImageExtensionFromMagic(bytes);
+		if (detected) {
+			return detected;
+		}
+		// Last-resort: try to recover from the display name; else .png is a
+		// safe bet — claude's image loader uses content sniffing too.
+		const nameExt = img.name ? path.extname(img.name).toLowerCase() : '';
+		return nameExt && /^\.(png|jpe?g|gif|webp|bmp|svg)$/.test(nameExt) ? nameExt : '.png';
+	}
+
+	private _detectImageExtensionFromMagic(buf: Uint8Array): string | undefined {
+		if (buf.length < 4) {
+			return undefined;
+		}
+		// PNG: 89 50 4E 47
+		if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) {
+			return '.png';
+		}
+		// JPEG: FF D8 FF
+		if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) {
+			return '.jpg';
+		}
+		// GIF: 47 49 46 38
+		if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) {
+			return '.gif';
+		}
+		// WEBP: "RIFF"…"WEBP"
+		if (buf.length >= 12 && buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46
+			&& buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) {
+			return '.webp';
+		}
+		// BMP: "BM"
+		if (buf[0] === 0x42 && buf[1] === 0x4D) {
+			return '.bmp';
+		}
+		return undefined;
+	}
+
+	private _removeTempDir(dir: string): void {
+		try {
+			fs.rmSync(dir, { recursive: true, force: true });
+		} catch (err) {
+			this.logService.warn(`[wfm-claude] failed to remove temp dir ${dir}: ${(err as Error).message}`);
+		}
+	}
+
 	private _buildMcpConfigJson(workspaceRoot: string, cadSourceUri: string | undefined): string {
 		const env: Record<string, string> = { WFM_WORKSPACE_ROOT: workspaceRoot };
 		if (cadSourceUri) {
 			env.WFM_CAD_SOURCE_URI = cadSourceUri;
+		}
+		if (this._browserApiServer.port) {
+			env.WFM_BROWSER_API_PORT = String(this._browserApiServer.port);
 		}
 
 		const moduleSearchRoot = this._resolveAgentsRoot();
@@ -316,6 +484,9 @@ export class WfmClaudeMainService extends Disposable implements IWfmClaudeServic
 	private _wireExit(turn: IActiveTurn): void {
 		turn.process.on('exit', (code, signal) => {
 			this._turns.delete(turn.turnId);
+			if (turn.tempDir) {
+				this._removeTempDir(turn.tempDir);
+			}
 			this.logService.info(
 				`[wfm-claude] turn ${turn.turnId} exited (code=${code}, signal=${signal})`,
 			);
@@ -330,6 +501,9 @@ export class WfmClaudeMainService extends Disposable implements IWfmClaudeServic
 
 		turn.process.on('error', (err) => {
 			this._turns.delete(turn.turnId);
+			if (turn.tempDir) {
+				this._removeTempDir(turn.tempDir);
+			}
 			this.logService.error(`[wfm-claude] turn ${turn.turnId} spawn error: ${err.message}`);
 			this._onEvent.fire({
 				turnId: turn.turnId,

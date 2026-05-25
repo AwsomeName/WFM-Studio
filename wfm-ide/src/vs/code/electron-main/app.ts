@@ -1346,8 +1346,16 @@ export class CodeApplication extends Disposable {
 		mainProcessElectronServer.registerChannel(McpGatewayChannelName, mcpGatewayChannel);
 
 		// WFM Studio: Claude Code CLI bridge (renderer → main process spawn)
-		const wfmClaudeChannel = ProxyChannel.fromService(accessor.get(IWfmClaudeService), disposables);
+		const wfmClaudeService = accessor.get(IWfmClaudeService);
+		const wfmClaudeChannel = ProxyChannel.fromService(wfmClaudeService, disposables);
 		mainProcessElectronServer.registerChannel('wfmClaude', wfmClaudeChannel);
+		// Hand the IPC server to the browser-bridge HTTP adapter inside the
+		// claude service so it can forward MCP requests to the renderer-side
+		// IBrowserBridgeService (which drives Playwright + opens the page in
+		// the main editor area so the user can see it and interact manually).
+		if (wfmClaudeService instanceof WfmClaudeMainService) {
+			wfmClaudeService.attachIpcServer(mainProcessElectronServer);
+		}
 
 		// WFM Studio: STEP → GLB converter bridge (renderer → main process spawn)
 		const wfmStepConverterChannel = ProxyChannel.fromService(accessor.get(IWfmStepConverterService), disposables);

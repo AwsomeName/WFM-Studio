@@ -1,8 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  WFM Studio – Knowledge Base sidebar contribution.
  *
- *  Registers a ViewContainer (activity bar icon), a webview-based view for
- *  browsing a remote Dify knowledge base, and configuration settings.
+ *  Two-level navigation backed by Dify HTTP APIs:
+ *    1. Datasets (knowledge bases) — `GET /v1/datasets`
+ *    2. Documents inside a dataset — `GET /v1/datasets/{id}/documents`
+ *    3. Segments inside a document — `GET /v1/datasets/{id}/documents/{doc}/segments`
+ *
+ *  All HTTP traffic goes through `IRequestService` (electron-net in the
+ *  main process), bypassing the renderer fetch + CORS preflight that fails
+ *  against api.dify.ai from the `vscode-file://` origin.
  *--------------------------------------------------------------------------------------------*/
 
 import { localize, localize2 } from '../../../../../nls.js';
@@ -18,6 +24,8 @@ import { Codicon } from '../../../../../base/common/codicons.js';
 import { registerIcon } from '../../../../../platform/theme/common/iconRegistry.js';
 import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
+import { IRequestService, asText } from '../../../../../platform/request/common/request.js';
+import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { FileAccess } from '../../../../../base/common/network.js';
 import { asWebviewUri, webviewGenericCspSource } from '../../../webview/common/webview.js';
 import { joinPath } from '../../../../../base/common/resources.js';
@@ -38,6 +46,8 @@ const MEDIA_ROOT = FileAccess.asFileUri(
 	'vs/workbench/contrib/wfm/knowledgeBase/browser/media/',
 );
 
+const DEFAULT_API_URL = 'https://api.dify.ai/v1';
+
 // ── 1. Settings ──────────────────────────────────────────
 
 const configRegistry = Registry.as<IConfigurationRegistry>(ConfigExt.Configuration);
@@ -48,21 +58,15 @@ configRegistry.registerConfiguration({
 	properties: {
 		'wfm.knowledgeBase.apiUrl': {
 			type: 'string',
-			default: 'https://api.dify.ai/v1',
+			default: DEFAULT_API_URL,
 			description: localize('kb.apiUrl', "Dify API base URL"),
 			order: 1,
 		},
 		'wfm.knowledgeBase.apiKey': {
 			type: 'string',
 			default: '',
-			description: localize('kb.apiKey', "Dify API Key"),
+			description: localize('kb.apiKey', "Dify API Key (must be a Dataset-scoped key)"),
 			order: 2,
-		},
-		'wfm.knowledgeBase.datasetId': {
-			type: 'string',
-			default: '',
-			description: localize('kb.datasetId', "Dify Dataset / Knowledge Base ID"),
-			order: 3,
 		},
 	},
 });
@@ -101,6 +105,7 @@ class KbWebviewResolverContribution extends Disposable {
 		@IWebviewViewService private readonly webviewViewService: IWebviewViewService,
 		@IConfigurationService private readonly configService: IConfigurationService,
 		@ICommandService private readonly commandService: ICommandService,
+		@IRequestService private readonly requestService: IRequestService,
 	) {
 		super();
 
@@ -109,9 +114,8 @@ class KbWebviewResolverContribution extends Disposable {
 				resolve: async (webviewView) => {
 					const wv = webviewView.webview;
 
-					// Allow scripts and load local media files
 					wv.contentOptions = {
-						enableScripts: true,
+						allowScripts: true,
 						localResourceRoots: [MEDIA_ROOT],
 					};
 
@@ -127,7 +131,6 @@ class KbWebviewResolverContribution extends Disposable {
 					});
 					wv.setHtml(html);
 
-					// Handle messages from the webview
 					this._register(
 						wv.onMessage((evt) => this.onMessage(wv, evt.message)),
 					);
@@ -136,51 +139,48 @@ class KbWebviewResolverContribution extends Disposable {
 		);
 	}
 
-	// ── Message handler ───────────────────────────────────
+	// ── Message router ────────────────────────────────────
 
 	private async onMessage(wv: any, msg: any): Promise<void> {
 		if (!msg || !msg.type) { return; }
 
-		// Config-related messages don't require existing config
-		if (msg.type === 'getConfig') {
-			this.sendConfig(wv);
-			return;
-		}
-		if (msg.type === 'saveConfig') {
-			await this.saveConfig(wv, msg.apiUrl, msg.apiKey, msg.datasetId);
-			return;
-		}
-		if (msg.type === 'editConfig') {
-			this.sendConfig(wv, /*forceForm*/ true);
-			return;
-		}
-		if (msg.type === 'openSettings') {
-			this.commandService.executeCommand('workbench.action.openSettings', 'wfm.knowledgeBase');
-			return;
-		}
-
-		const apiUrl = this.configService.getValue<string>('wfm.knowledgeBase.apiUrl') || '';
-		const apiKey = this.configService.getValue<string>('wfm.knowledgeBase.apiKey') || '';
-		const datasetId = this.configService.getValue<string>('wfm.knowledgeBase.datasetId') || '';
-
-		if (!apiUrl || !apiKey || !datasetId) {
-			if (msg.type === 'ready' || msg.type === 'listDocuments') {
+		switch (msg.type) {
+			case 'getConfig':
+			case 'editConfig':
 				this.sendConfig(wv);
-			}
+				return;
+
+			case 'saveConfig':
+				await this.handleSaveConfig(wv, msg.apiUrl, msg.apiKey);
+				return;
+
+			case 'openSettings':
+				this.commandService.executeCommand('workbench.action.openSettings', 'wfm.knowledgeBase');
+				return;
+		}
+
+		const apiUrl = (this.configService.getValue<string>('wfm.knowledgeBase.apiUrl') || DEFAULT_API_URL).replace(/\/+$/, '');
+		const apiKey = this.configService.getValue<string>('wfm.knowledgeBase.apiKey') || '';
+
+		if (!apiUrl || !apiKey) {
+			this.sendConfig(wv);
 			return;
 		}
 
 		try {
 			switch (msg.type) {
 				case 'ready':
+				case 'listDatasets':
+					await this.loadDatasets(wv, apiUrl, apiKey);
+					break;
 				case 'listDocuments':
-					await this.loadDocuments(wv, apiUrl, apiKey, datasetId);
+					await this.loadDocuments(wv, apiUrl, apiKey, msg.datasetId, msg.datasetName);
 					break;
 				case 'getSegments':
-					await this.loadSegments(wv, apiUrl, apiKey, datasetId, msg.documentId);
+					await this.loadSegments(wv, apiUrl, apiKey, msg.datasetId, msg.documentId, msg.documentName);
 					break;
 				case 'search':
-					await this.search(wv, apiUrl, apiKey, datasetId, msg.query);
+					await this.search(wv, apiUrl, apiKey, msg.datasetId, msg.datasetName, msg.query);
 					break;
 			}
 		} catch (err: any) {
@@ -190,21 +190,19 @@ class KbWebviewResolverContribution extends Disposable {
 
 	// ── Config helpers ────────────────────────────────────
 
-	private sendConfig(wv: any, forceForm: boolean = false): void {
-		const apiUrl = this.configService.getValue<string>('wfm.knowledgeBase.apiUrl') || 'https://api.dify.ai/v1';
+	private sendConfig(wv: any): void {
+		const apiUrl = this.configService.getValue<string>('wfm.knowledgeBase.apiUrl') || DEFAULT_API_URL;
 		const apiKey = this.configService.getValue<string>('wfm.knowledgeBase.apiKey') || '';
-		const datasetId = this.configService.getValue<string>('wfm.knowledgeBase.datasetId') || '';
-		wv.postMessage({ type: 'config', apiUrl, apiKey, datasetId, forceForm });
+		wv.postMessage({ type: 'config', apiUrl, apiKey });
 	}
 
-	private async saveConfig(wv: any, apiUrl: string, apiKey: string, datasetId: string): Promise<void> {
+	private async handleSaveConfig(wv: any, apiUrl: string, apiKey: string): Promise<void> {
+		const cleanedUrl = ((apiUrl || '').trim() || DEFAULT_API_URL).replace(/\/+$/, '');
+		const cleanedKey = (apiKey || '').trim();
 		try {
-			await this.configService.updateValue('wfm.knowledgeBase.apiUrl', (apiUrl || '').trim() || 'https://api.dify.ai/v1', ConfigurationTarget.USER);
-			await this.configService.updateValue('wfm.knowledgeBase.apiKey', (apiKey || '').trim(), ConfigurationTarget.USER);
-			await this.configService.updateValue('wfm.knowledgeBase.datasetId', (datasetId || '').trim(), ConfigurationTarget.USER);
-			// Immediately load documents with the new config
-			const url = (apiUrl || '').trim() || 'https://api.dify.ai/v1';
-			await this.loadDocuments(wv, url, (apiKey || '').trim(), (datasetId || '').trim());
+			await this.configService.updateValue('wfm.knowledgeBase.apiUrl', cleanedUrl, ConfigurationTarget.USER);
+			await this.configService.updateValue('wfm.knowledgeBase.apiKey', cleanedKey, ConfigurationTarget.USER);
+			await this.loadDatasets(wv, cleanedUrl, cleanedKey);
 		} catch (err: any) {
 			wv.postMessage({ type: 'error', message: err?.message ?? String(err) });
 		}
@@ -212,46 +210,54 @@ class KbWebviewResolverContribution extends Disposable {
 
 	// ── Dify API calls ────────────────────────────────────
 
-	private async loadDocuments(wv: any, apiUrl: string, apiKey: string, datasetId: string): Promise<void> {
-		wv.postMessage({ type: 'loading' });
-		const url = `${apiUrl}/datasets/${datasetId}/documents?page=1&limit=100`;
-		const res = await this.difyFetch(url, apiKey);
-		const data = await res.json();
-		const docs = (data.data ?? []).map((d: any) => ({
+	private async loadDatasets(wv: any, apiUrl: string, apiKey: string): Promise<void> {
+		wv.postMessage({ type: 'loading', scope: 'datasets' });
+		const data = await this.difyJson<any>(`${apiUrl}/datasets?page=1&limit=100`, apiKey);
+		const datasets = (data?.data ?? []).map((d: any) => ({
+			id: d.id,
+			name: d.name,
+			description: d.description ?? '',
+			document_count: d.document_count ?? 0,
+			word_count: d.word_count ?? 0,
+			indexing_technique: d.indexing_technique ?? '',
+		}));
+		wv.postMessage({ type: 'datasets', datasets });
+	}
+
+	private async loadDocuments(wv: any, apiUrl: string, apiKey: string, datasetId: string, datasetName: string): Promise<void> {
+		wv.postMessage({ type: 'loading', scope: 'documents' });
+		const data = await this.difyJson<any>(`${apiUrl}/datasets/${datasetId}/documents?page=1&limit=100`, apiKey);
+		const docs = (data?.data ?? []).map((d: any) => ({
 			id: d.id,
 			name: d.name,
 			word_count: d.word_count ?? 0,
 			hit_count: d.hit_count ?? 0,
 			indexing_status: d.indexing_status ?? 'completed',
 			created_at: d.created_at,
-			updated_at: d.updated_at,
 		}));
-		wv.postMessage({ type: 'documents', docs });
+		wv.postMessage({ type: 'documents', datasetId, datasetName, docs });
 	}
 
-	private async loadSegments(wv: any, apiUrl: string, apiKey: string, datasetId: string, docId: string): Promise<void> {
-		const url = `${apiUrl}/datasets/${datasetId}/documents/${docId}/segments`;
-		const res = await this.difyFetch(url, apiKey);
-		const data = await res.json();
-		const segments = (data.data ?? []).map((s: any) => ({
+	private async loadSegments(wv: any, apiUrl: string, apiKey: string, datasetId: string, docId: string, docName: string): Promise<void> {
+		wv.postMessage({ type: 'loading', scope: 'segments' });
+		const data = await this.difyJson<any>(`${apiUrl}/datasets/${datasetId}/documents/${docId}/segments`, apiKey);
+		const segments = (data?.data ?? []).map((s: any) => ({
 			id: s.id,
 			content: s.content,
 			position: s.position ?? 0,
 			word_count: s.word_count ?? 0,
 		}));
-		const docName = data.doc_name ?? (data.document?.name ?? docId);
-		wv.postMessage({ type: 'segments', docId, docName, segments });
+		const resolvedName = data?.doc_name ?? data?.document?.name ?? docName ?? docId;
+		wv.postMessage({ type: 'segments', datasetId, docId, docName: resolvedName, segments });
 	}
 
-	private async search(wv: any, apiUrl: string, apiKey: string, datasetId: string, query: string): Promise<void> {
-		const url = `${apiUrl}/datasets/${datasetId}/retrieve`;
-		const res = await this.difyFetch(url, apiKey, {
+	private async search(wv: any, apiUrl: string, apiKey: string, datasetId: string, datasetName: string, query: string): Promise<void> {
+		wv.postMessage({ type: 'loading', scope: 'search' });
+		const data = await this.difyJson<any>(`${apiUrl}/datasets/${datasetId}/retrieve`, apiKey, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ query }),
 		});
-		const data = await res.json();
-		const results = (data.records ?? []).map((r: any) => ({
+		const results = (data?.records ?? []).map((r: any) => ({
 			segment: {
 				id: r.segment?.id ?? '',
 				content: r.segment?.content ?? '',
@@ -263,20 +269,45 @@ class KbWebviewResolverContribution extends Disposable {
 				? { id: r.segment.document.id, name: r.segment.document.name }
 				: undefined,
 		}));
-		wv.postMessage({ type: 'searchResults', query, results });
+		wv.postMessage({ type: 'searchResults', datasetId, datasetName, query, results });
 	}
 
-	private async difyFetch(url: string, apiKey: string, init?: RequestInit): Promise<Response> {
-		const headers: Record<string, string> = {
-			'Authorization': `Bearer ${apiKey}`,
-			...(init?.headers as Record<string, string> ?? {}),
-		};
-		const response = await fetch(url, { ...init, headers });
-		if (!response.ok) {
-			const text = await response.text().catch(() => '');
-			throw new Error(`Dify API ${response.status}: ${text || response.statusText}`);
+	// ── Low-level HTTP via IRequestService (electron-net, no CORS) ──
+
+	private async difyJson<T>(url: string, apiKey: string, init?: { method?: string; body?: string }): Promise<T> {
+		const ctx = await this.requestService.request({
+			type: init?.method ?? 'GET',
+			url,
+			data: init?.body,
+			headers: {
+				'Authorization': `Bearer ${apiKey}`,
+				...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+				'Accept': 'application/json',
+			},
+			callSite: 'WfmKnowledgeBase',
+		}, CancellationToken.None);
+
+		const status = ctx.res.statusCode ?? 0;
+		const body = (await asText(ctx)) ?? '';
+
+		if (status < 200 || status >= 300) {
+			let detail = body;
+			try {
+				const j = body ? JSON.parse(body) : null;
+				detail = j?.message || j?.error_msg || body;
+			} catch { /* keep raw body */ }
+			throw new Error(`Dify API ${status || 'no-status'}: ${detail || 'request failed'}`);
 		}
-		return response;
+
+		if (!body) {
+			throw new Error('Dify API returned empty response');
+		}
+
+		try {
+			return JSON.parse(body) as T;
+		} catch (err: any) {
+			throw new Error(`Dify API returned invalid JSON: ${err?.message ?? String(err)}`);
+		}
 	}
 }
 
@@ -295,7 +326,7 @@ function buildKbHtml(args: IKbHtmlArgs): string {
 		`default-src 'none'`,
 		`style-src ${cspSource} 'unsafe-inline'`,
 		`script-src 'nonce-${nonce}'`,
-		`connect-src https:`,  // allow Dify API calls
+		`img-src ${cspSource} data:`,
 	].join('; ');
 
 	return /*html*/ `<!DOCTYPE html>

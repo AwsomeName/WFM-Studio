@@ -169,6 +169,26 @@ if [[ $TAIL_LOGS -eq 1 && $LAUNCH_WATCH -eq 1 ]]; then
 	TAIL_PIDS+=("$!")
 fi
 
+# ───────── 强制同步 WFM 自研 webview 资源 (media/) ─────────
+# watch 的 incremental 编译只搬动 .ts 出来的产物，src/**/media/*.{js,css,html,svg}
+# 这类静态资源在 out/ 已存在同名旧文件时常常不会被覆盖，结果 webview 始终加载
+# 旧版本（典型症状：你刚改完 webview JS 没生效）。
+# 这里在 IDE 启动前用 rsync 把所有 contrib/wfm/**/media/ 强制同步到 out/。
+WFM_IDE_SRC="$IDE_DIR/src/vs/workbench/contrib/wfm"
+WFM_IDE_OUT="$IDE_DIR/out/vs/workbench/contrib/wfm"
+if [[ -d "$WFM_IDE_SRC" && -d "$WFM_IDE_OUT" ]]; then
+	log "同步 contrib/wfm/**/media/ 静态资源到 out/ ..."
+	while IFS= read -r -d '' media_dir; do
+		rel="${media_dir#"$WFM_IDE_SRC/"}"
+		dst="$WFM_IDE_OUT/$rel"
+		mkdir -p "$dst"
+		rsync -a --delete \
+			--exclude '*.ts' --exclude '*.tsx' \
+			"$media_dir/" "$dst/"
+	done < <(find "$WFM_IDE_SRC" -type d -name media -print0)
+	ok "media/ 同步完成"
+fi
+
 # ───────── OSS IDE ─────────
 if [[ $LAUNCH_IDE -eq 1 ]]; then
 	log "启动 IDE (wfm-ide/scripts/code.sh，日志镜像到 $IDE_LOG)"
@@ -177,12 +197,16 @@ if [[ $LAUNCH_IDE -eq 1 ]]; then
 	# 它们会让 Electron 二进制变回纯 Node（process.type=undefined），
 	# 触发 out/main.js 的 `import { app, Menu } from 'electron'` 报 named import missing。
 	# 这里清掉再 exec code.sh，保证从 cursor 内置终端跑也能正常拉起。
+	# 国内直连 github.com 经常 ECONNRESET，code.sh → preLaunch.ts → @electron/get
+	# 拉 SHASUMS256.txt 会挂。这里默认走 npmmirror 镜像（含 zip + SHASUMS）。
+	# 用户可在外层 export ELECTRON_MIRROR=... 覆盖。
 	(
 		cd "$IDE_DIR"
 		unset ELECTRON_RUN_AS_NODE VSCODE_CODE_CACHE_PATH \
 			VSCODE_CRASH_REPORTER_PROCESS_TYPE VSCODE_CWD VSCODE_ESM_ENTRYPOINT \
 			VSCODE_HANDLES_UNCAUGHT_ERRORS VSCODE_IPC_HOOK VSCODE_NLS_CONFIG \
 			VSCODE_PID VSCODE_PROCESS_TITLE
+		export ELECTRON_MIRROR="${ELECTRON_MIRROR:-https://cdn.npmmirror.com/binaries/electron/}"
 		exec ./scripts/code.sh
 	) 2>&1 | tee "$IDE_LOG" || true
 else

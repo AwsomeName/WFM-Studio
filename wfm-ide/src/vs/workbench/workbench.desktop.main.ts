@@ -184,6 +184,9 @@ import './contrib/chat/electron-browser/chat.contribution.js';
 // WFM Studio: Claude Code CLI chat agent (overrides default chat participant)
 import './contrib/wfm/electron-browser/wfmClaudeAgent.contribution.js';
 
+// WFM Studio: Browser bridge (renderer ↔ main process for MCP browser tools)
+import './contrib/wfm/electron-browser/browserBridge.contribution.js';
+
 // Encryption
 import './contrib/encryption/electron-browser/encryption.contribution.js';
 

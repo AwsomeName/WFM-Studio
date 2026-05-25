@@ -66,6 +66,7 @@
   - 新增（Uni-Studio 模块）：`contrib/uni/browser/uni.contribution.js`
   - 后续新增：`contrib/uni/pptEditor/browser/pptEditor.contribution.js`、`contrib/uni/docGen/browser/docGen.contribution.js`
   - 新增（WFM CAD 浏览与审图）：`contrib/wfm/cadReview/browser/cadReview.contribution.js`（v0.2：webview 内嵌 cad-viewer + libredwg-web 真渲染 .dwg/.dxf；详见 `docs/ARCH_CAD_REVIEW.md`）
+  - 新增（WFM PPT 预览 + 选区送对话）：`contrib/wfm/pptxViewer/browser/pptxViewer.contribution.js`（用 @aiden0z/pptx-renderer 渲染 .pptx，注入 data-wfm-slide-index / data-wfm-shape-index / data-wfm-run-index；详见 `docs/DEV_PPT_SELECTION_TO_CHAT.md`）
 - 目的：裁剪不需要的开发者模块 + 挂载 Uni-Studio / WFM Studio 自己的模块
 - 升级检查：确认注释和新增都还在；若上游重命名/删除我们依赖的模块路径，需调整
 
@@ -160,10 +161,16 @@
 
 ### wfm-ide/src/vs/workbench/contrib/chat/browser/agentSessions/localAgentSessionsController.ts
 
-- 改动类型：扩展 `onDidDisposeSession` handler（一处函数体扩写）
-- 改动摘要：handler 改成 `async`，在原本只 fire `removed` 的基础上追加一次 `await this.refresh(CancellationToken.None)`，然后 fire `{ removed, addedOrUpdated: this._items.values() }`
-- 目的：修复 SESSIONS 视图在 chat 面板新建会话后旧 session 一直不出现的 bug。上游事件链遗漏：旧模型 dispose → 后台 `storeSessions` 写完磁盘 → fire `onDidDisposeModel` → handler 只对外说 "remove 这一条"，但**没**通知视图"这一条已经从 live 变 historical 了"，于是 SESSIONS 永远空到 IDE 重启
-- 升级检查：若上游修复了这个 bug（在 dispose handler 里自己补 emit 了），把我们的扩展撤掉，回退到上游版本；若 `IChatSessionItemsDelta` 的结构变了（比如 `addedOrUpdated` 改名/拆字段），相应改一行
+- 改动类型：3 处函数体改动（`onDidDisposeSession` handler 扩写 + `addModelListeners` 补 fire + `toChatSessionItem` 移除 hasRequests 过滤）
+- 改动摘要：
+  1. `onDidDisposeSession` 改 `async`，原本只 fire `removed`，追加一次 `await this.refresh(CancellationToken.None)` + fire `{ removed, addedOrUpdated: this._items.values() }`
+  2. `addModelListeners` 在 `refresh()` 之后显式 fire `{ addedOrUpdated: [新加入的 live item] }`（上游 `refresh()` 内部从不广播事件，导致新建的空 session 加进了 `_items` 但 SESSIONS view 收不到通知）
+  3. `toChatSessionItem` 去掉「live model 必须 `hasRequests` 才出现在列表」的硬规则，改成「只要 chat model 还活着就显示」（保留「无 model 的 active 占位」过滤，避免幽灵条目）
+- 目的：让 SESSIONS 列表行为符合用户心智（参考 Cursor）——点 "New Session" 立刻出现一条 live 条目，可以来回切换；旧 session 也不需要 "至少发过 1 条消息" 才能出现。修 3 个真实可复现的 bug：
+  - 旧 session dispose 后视图不知道它转成 historical 了，要重启才能看到（fix 1）
+  - 新建 session 时 `_items` 已更新但事件没 fire，列表完全没反应（fix 2）
+  - 空 session 永远被过滤，"New Session" 按钮看起来完全失效（fix 3）
+- 升级检查：若上游把 `_items` / `refresh()` 加上事件广播，撤回 fix 1+2；若上游放宽 `hasRequests` 过滤或新增 `isUntitled` 字段，撤回 fix 3。`IChatSessionItemsDelta` 结构若变（比如 `addedOrUpdated` 改名/拆字段），相应改 2~3 行
 
 ### wfm-ide/src/vs/workbench/contrib/chat/browser/widgetHosts/viewPane/chatViewPane.ts
 
@@ -190,8 +197,10 @@
 
 ## 变更日志（每次修改或升级时追加一条）
 
+- 2026-05-24 浏览器自动化 MCP 桥改走 IPlaywrightService + IEditorService。原 `platform/wfmClaude/electron-main/browserApiServer.ts` 直接调 IBrowserViewMainService（裸 WebContentsView，没挂到任何 BrowserWindow，AI 操作只能"后台"看不见）；现重写为只做 HTTP→IPC 转发，目标是新建的渲染进程服务 `contrib/wfm/electron-browser/browserBridgeService.ts`：open() 走 `playwrightService.openPage(url)` 拿 pageId，紧接着 `editorService.openEditor({ resource: BrowserViewUri.forId(pageId), options: { pinned: true, viewState: { url } } })`，让 BrowserEditorResolver 创建 BrowserEditorInput → 主编辑区出标签页；click/type/hover/navigate 用 `playwrightService.invokeFunctionRaw` 跑 Playwright `locator.click/fill/hover`；screenshot 复用 `IBrowserViewWorkbenchService.captureScreenshot`；close 通过 IEditorGroupsService 找 BrowserEditorInput 并关闭。新增 channel 名 `wfmBrowserBridge`，在 `workbench.desktop.main.ts` 加 contribution import；`code/electron-main/app.ts` 注册 `wfmClaude` channel 之后追加一行 `wfmClaudeService.attachIpcServer(mainProcessElectronServer)`（用 `instanceof WfmClaudeMainService` gate）。`wfmClaudeMainService.ts` 删 `IBrowserViewMainService` 依赖、增 `attachIpcServer` 方法。验收：`curl POST /open -d '{"url":"https://example.com"}'` 返回新格式 `{ pageId, url, title, content:{body,elements:[{selector,tag,type,text}]} }`；同时浏览器标签页应出现在编辑器主区域，用户可手动点击/输入（验证码等场景），AI 通过 Playwright over CDP 不抢用户输入焦点
 - 2026-05-23 修复 STEP/STL 3D viewer 在 sandboxed renderer 里转换失败（"Converting STEP to GLB" 永久卡住或弹"未找到 STEP → GLB 转换器"）：新增 `platform/wfmStepConverter/{common,electron-main}/` 服务（参照 `wfmClaude` 模式）。`code/electron-main/app.ts` 追加 `services.set(IWfmStepConverterService, ...)` 与 `mainProcessElectronServer.registerChannel('wfmStepConverter', ...)`；`workbench/electron-browser/desktop.main.ts` 追加 `ProxyChannel.toService<IWfmStepConverterService>(...)`。`contrib/wfm/stepViewer/browser/stepViewerEditor.ts` 删除内嵌的 `nodeRequire('child_process')` + `process.execPath` 解析（sandboxed renderer 拿不到），改 inject `IWfmStepConverterService`。Python + step_to_glb.py 路径解析（env / appRoot 向上找 / packaged Resources / 用户工作区）全部迁移到主进程的 `WfmStepConverterMainService._resolvePythonAndScript`。顺带把 `.stl` 注册到同一个 viewer（STLLoader 在 webview 内直接解析，不走 Python）
 - 2026-05-23 (2) 撤回当天早些时候在 `contrib/wfm/browser/wfm.contribution.ts` 新增的 `wfm.chat.newChatAsTab` action：用户实测后明确说"开主编辑器区不是想要的"，他们要的是 cursor 那种"在 chat 面板内部并排开 tab"。vscode ChatViewPane 一次只能渲染 1 个 session，原生 UI 最接近"多 tab 并存"的是 **SideBySide 布局**（左列表 / 右当前对话）。改 `chat/browser/widgetHosts/viewPane/chatViewPane.ts` 的 4 个静态常量，把启用 SideBySide 的宽度门槛从 600px 降到 400px，让常见侧栏宽度就能常驻 SESSIONS 列表，旧 session 永远点回来 = "并排多会话"。`cmd+N` / `ctrl+L` 全部走回上游 `ACTION_ID_NEW_CHAT`，配合本日早些时候 `localAgentSessionsController.ts` 的 dispose handler 补丁，旧 session 立即进 SESSIONS 列表
+- 2026-05-23 (3) 用户实测"点 4 次 New Session 列表还是 0 条"，原因定位为 `localAgentSessionsController.ts` 的两处遗漏：(a) `toChatSessionItem` 硬过滤了所有 `hasRequests == false` 的 live model；(b) `addModelListeners` 里调 `refresh()` 但 `refresh()` 自己从来不广播事件，新 item 加进 `_items` 后 SESSIONS view 无感知。改 `toChatSessionItem` 让 live model 不再要求至少 1 条 request，并在 `addModelListeners` 末尾显式 fire 一次 `addedOrUpdated`。同时新增 `wfm.chat.resetSessionsFilter` 命令（命令面板 "WFM: Reset Chat Sessions Filter & Refresh"）作为 filter 残留排障兜底。改动落在 `localAgentSessionsController.ts` + `contrib/wfm/browser/wfm.contribution.ts`
 - 2026-05-23 修复 SESSIONS（历史会话）列表在 "New Chat" 后持续为空的问题：`chat/browser/agentSessions/localAgentSessionsController.ts` 的 `onDidDisposeSession` handler 在 fire `removed` 之后追加一次 `await this.refresh(...)` + `fire({ removed, addedOrUpdated: this._items.values() })`。根因：上游只 fire `removed`，导致刚从 live 转为 historical 的 session 在 SESSIONS 视图里直接消失，必须重启 IDE 才会出现
 - 2026-05-23 修复 chat 标题栏 "New Chat" / "New Chat Editor" / "New Chat Window" 三个菜单项以及历史按钮（`workbench.action.chat.history`）置灰、cmd+N 无效的问题：`contrib/wfm/electron-browser/wfmClaudeAgent.contribution.ts` 的 `_bypassChatSetupGates()` 追加 `ChatContextKeys.enabled.bindTo(ctx).set(true)`。根因：上游 `ChatAgentService` 仅在 `registerAgentImplementation` 内部把 `chatIsEnabled` 翻成 true，我们用 `registerDynamicAgent` 注册 Claude agent 不会触发该路径，导致 `precondition: ChatContextKeys.enabled` 的所有按钮一直 disabled
 - 2026-05-23 永久关闭 Microsoft Copilot Sessions Window 入口：`code/electron-main/app.ts` 注释掉 `openFirstWindow` 里 `openAgentsWindow` 那段 if；`platform/windows/electron-main/windowsMainService.ts` 把 `isSessionsWindow` 常量化为 `false`。修复用户截图中"左侧 Sessions / Customizations、中央 Chat bar 带 Copilot CLI、右侧 Files/Changes"的反向布局，以及 .dwg 双击进 BinaryFileEditor 的现象。同时新增 `contrib/wfm/browser/wfm.contribution.ts` 通用「发送到对话」右键 Action（任意非目录文件 → 添加到 Chat 面板 attachmentModel）

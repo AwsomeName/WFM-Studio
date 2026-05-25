@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -11,96 +10,7 @@ from docx import Document
 from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 
-
-# ── Markdown Lexer ─────────────────────────────────────────────────────
-
-
-@dataclass
-class _MdToken:
-    type: str  # heading | paragraph | table | bullet | ordered
-    payload: dict[str, Any] = field(default_factory=dict)
-
-
-_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
-_BULLET_RE = re.compile(r"^[-*]\s+(.+)$")
-_ORDERED_RE = re.compile(r"^(\d+)\.\s+(.+)$")
-_TABLE_SEP_RE = re.compile(r"^\|([\s:]*[-:]+[\s:]*\|)+$")
-
-
-def _lex_markdown(text: str) -> list[_MdToken]:
-    lines = text.split("\n")
-    tokens: list[_MdToken] = []
-    i = 0
-
-    while i < len(lines):
-        line = lines[i]
-
-        # Skip blank lines
-        if not line.strip():
-            i += 1
-            continue
-
-        # Heading
-        m = _HEADING_RE.match(line)
-        if m:
-            tokens.append(_MdToken("heading", {"level": len(m.group(1)), "text": m.group(2)}))
-            i += 1
-            continue
-
-        # Table — collect consecutive | lines
-        if line.startswith("|"):
-            table_lines: list[str] = []
-            while i < len(lines) and lines[i].startswith("|"):
-                table_lines.append(lines[i])
-                i += 1
-            tokens.append(_parse_table_block(table_lines))
-            continue
-
-        # Bullet list
-        m = _BULLET_RE.match(line)
-        if m:
-            tokens.append(_MdToken("bullet", {"text": m.group(1)}))
-            i += 1
-            continue
-
-        # Ordered list
-        m = _ORDERED_RE.match(line)
-        if m:
-            tokens.append(_MdToken("ordered", {"number": int(m.group(1)), "text": m.group(2)}))
-            i += 1
-            continue
-
-        # Paragraph (fallback)
-        tokens.append(_MdToken("paragraph", {"text": line}))
-        i += 1
-
-    return tokens
-
-
-def _parse_table_block(lines: list[str]) -> _MdToken:
-    """Parse consecutive pipe-delimited lines into a table token."""
-    cells = [_split_pipe_line(ln) for ln in lines]
-
-    # Find separator row
-    sep_idx = -1
-    for idx, ln in enumerate(lines):
-        if _TABLE_SEP_RE.match(ln.strip()):
-            sep_idx = idx
-            break
-
-    if sep_idx < 1:
-        # No valid separator — treat as paragraph
-        return _MdToken("paragraph", {"text": "\n".join(lines)})
-
-    headers = cells[0]
-    rows = [cells[r] for r in range(sep_idx + 1, len(cells))]
-    return _MdToken("table", {"headers": headers, "rows": rows})
-
-
-def _split_pipe_line(line: str) -> list[str]:
-    """Split '| a | b | c |' into ['a', 'b', 'c']."""
-    parts = line.strip().strip("|").split("|")
-    return [p.strip() for p in parts]
+from .._md_lex import MdToken, lex_markdown  # noqa: PLC0415
 
 
 # ── Inline Formatting ──────────────────────────────────────────────────
@@ -269,7 +179,7 @@ def _apply_default_styles(doc: Document) -> None:
 
 
 def _build_document(
-    tokens: list[_MdToken],
+    tokens: list[MdToken],
     template_doc: Document | None = None,
 ) -> Document:
     """Build a python-docx Document from parsed Markdown tokens."""
@@ -353,7 +263,7 @@ def markdown_to_docx(
     if template_path is not None:
         template_doc = Document(str(template_path))
 
-    tokens = _lex_markdown(content)
+    tokens = lex_markdown(content)
     doc = _build_document(tokens, template_doc)
 
     if variables:
@@ -383,7 +293,7 @@ def write_docx_from_markdown(
     size_kb = result.stat().st_size / 1024
     parts = [f"文档已生成: {result} ({size_kb:.1f} KB)"]
 
-    tokens = _lex_markdown(content)
+    tokens = lex_markdown(content)
     headings = sum(1 for t in tokens if t.type == "heading")
     paragraphs = sum(1 for t in tokens if t.type == "paragraph")
     tables = sum(1 for t in tokens if t.type == "table")

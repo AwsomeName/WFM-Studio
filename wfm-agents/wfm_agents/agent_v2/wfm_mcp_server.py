@@ -727,5 +727,218 @@ def docx_write(
         return f"Error: 文档生成失败: {exc}"
 
 
+# ── XLSX tools ────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def xlsx_read(
+    path: str,
+    sheet: str | None = None,
+    max_rows_per_sheet: int = 200,
+) -> str:
+    """Parse an .xlsx file, returning structured content as Markdown tables.
+
+    Args:
+        path: .xlsx file path (workspace-relative or absolute).
+        sheet: Optional sheet name to read. Reads all sheets when None.
+        max_rows_per_sheet: Maximum rows per sheet (default 200).
+    """
+    from ..workspace import resolve_within, WorkspaceViolation  # noqa: PLC0415
+    from ..xlsx import parse_xlsx, format_xlsx_content  # noqa: PLC0415
+
+    root = _root()
+    try:
+        target = resolve_within(root, path)
+    except WorkspaceViolation as exc:
+        return f"Error: {exc}"
+
+    if not target.is_file():
+        return f"Error: 文件不存在: {path}"
+    if target.suffix.lower() != ".xlsx":
+        return f"Error: 仅支持 .xlsx 文件: {path}"
+
+    try:
+        content = parse_xlsx(target, sheet=sheet, max_rows_per_sheet=max_rows_per_sheet)
+    except Exception as exc:
+        return f"Error: 文件解析失败: {exc}"
+
+    return format_xlsx_content(content)
+
+
+@mcp.tool()
+def xlsx_write(path: str, sheets: str) -> str:
+    """Create or overwrite an .xlsx file from Markdown table content.
+
+    Args:
+        path: Output .xlsx path (workspace-relative).
+        sheets: JSON array of sheets. Each element is:
+            {"name": "Sheet名称", "content": "Markdown表格文本"}
+            Multiple sheets supported in one call.
+    """
+    from ..workspace import resolve_within, WorkspaceViolation  # noqa: PLC0415
+    from ..xlsx.writer import write_xlsx_from_sheets  # noqa: PLC0415
+
+    root = _root()
+    try:
+        dst = resolve_within(root, path)
+    except WorkspaceViolation as exc:
+        return f"Error: {exc}"
+
+    if dst.suffix.lower() != ".xlsx":
+        return f"Error: 仅支持 .xlsx 文件: {path}"
+
+    try:
+        sheets_data = json.loads(sheets)
+    except json.JSONDecodeError as exc:
+        return f"Error: sheets JSON 解析失败: {exc}"
+
+    if not isinstance(sheets_data, list) or not sheets_data:
+        return "Error: sheets 必须是非空 JSON 数组"
+
+    try:
+        return write_xlsx_from_sheets(dst, sheets_data)
+    except Exception as exc:
+        return f"Error: 文件生成失败: {exc}"
+
+
+# ── PPTX tools ──────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def pptx_read(path: str, detail_level: str = "summary") -> str:
+    """Read and parse a .pptx file, returning structured content with font info.
+
+    Use to understand current fonts, sizes, and structure before editing with pptx_write.
+
+    Args:
+        path: .pptx file path (workspace-relative).
+        detail_level: "summary" (default) — Markdown overview with per-run font info;
+            "fonts_only" — deduplicated font inventory only;
+            "full" — complete structured JSON.
+    """
+    from ..pptx import format_pptx_content, parse_pptx, summarize_fonts  # noqa: PLC0415
+    from ..workspace import WorkspaceViolation, resolve_within  # noqa: PLC0415
+
+    root = _root()
+    try:
+        target = resolve_within(root, path)
+    except WorkspaceViolation as exc:
+        return f"Error: {exc}"
+
+    if not target.is_file():
+        return f"Error: 文件不存在: {path}"
+    if target.suffix.lower() != ".pptx":
+        return f"Error: 仅支持 .pptx 文件: {path}"
+
+    try:
+        content = parse_pptx(target)
+    except Exception as exc:
+        return f"Error: PPTX 解析失败: {exc}"
+
+    if detail_level == "fonts_only":
+        return json.dumps(summarize_fonts(content), ensure_ascii=False)
+    if detail_level == "full":
+        return json.dumps(content, ensure_ascii=False, default=str)
+    return format_pptx_content(content)
+
+
+@mcp.tool()
+def pptx_write(
+    path: str,
+    font_rules: str | None = None,
+    output_path: str | None = None,
+    dry_run: bool = False,
+) -> str:
+    """Edit a .pptx file by applying font/style rules.
+
+    Preserves all layout, images, shapes, and animations — only modifies text formatting.
+
+    Args:
+        path: Source .pptx file path (workspace-relative).
+        font_rules: JSON array of font rule objects. Each rule:
+            - scope: "title" | "body" | "subtitle" | "textbox" | "all"
+            - latin: Latin font name (optional)
+            - ea: East Asian/CJK font name (optional)
+            - cs: Complex Script font name (optional)
+            - size_pt: Font size in points (optional)
+            - bold: true/false (optional)
+            - italic: true/false (optional)
+            - slide_range: [start, end] slide index filter, null=unbounded (optional)
+            - include_tables: whether to affect text inside tables (optional, default false)
+        output_path: Save to different file (workspace-relative). Default: overwrite source.
+        dry_run: If true, return a preview of changes without modifying the file.
+
+    Example:
+        font_rules='[{"scope":"title","latin":"Arial","ea":"思源黑体","size_pt":28},
+                     {"scope":"body","latin":"Arial","ea":"思源黑体","size_pt":18}]'
+    """
+    from ..pptx.writer import apply_font_rules  # noqa: PLC0415
+    from ..workspace import WorkspaceViolation, resolve_within  # noqa: PLC0415
+
+    root = _root()
+    try:
+        src = resolve_within(root, path)
+    except WorkspaceViolation as exc:
+        return f"Error: {exc}"
+
+    if not src.is_file():
+        return f"Error: 文件不存在: {path}"
+    if src.suffix.lower() != ".pptx":
+        return f"Error: 仅支持 .pptx 文件: {path}"
+    if not font_rules:
+        return "Error: 需要提供 font_rules 参数"
+
+    try:
+        rules = json.loads(font_rules)
+    except json.JSONDecodeError as exc:
+        return f"Error: font_rules JSON 解析失败: {exc}"
+    if not isinstance(rules, list) or not rules:
+        return "Error: font_rules 必须是非空 JSON 数组"
+
+    for i, rule in enumerate(rules):
+        if not isinstance(rule, dict):
+            return f"Error: font_rules[{i}] 必须是 JSON 对象"
+        if "scope" not in rule:
+            return f"Error: font_rules[{i}] 缺少 scope 字段"
+        valid_keys = {"scope", "latin", "ea", "cs", "size_pt", "bold", "italic",
+                      "slide_range", "include_tables"}
+        unknown = set(rule) - valid_keys
+        if unknown:
+            return f"Error: font_rules[{i}] 含未知字段: {unknown}"
+
+    dst = None
+    if output_path:
+        try:
+            dst = resolve_within(root, output_path)
+        except WorkspaceViolation as exc:
+            return f"Error: {exc}"
+
+    try:
+        result = apply_font_rules(src, rules, output_path=dst, dry_run=dry_run)
+        if dry_run:
+            changes = result["would_modify"]
+            preview = "\n".join(
+                f"  - Slide {c['slide']} / {c['shape']}: {c['field']} "
+                f'"{c["old"]}" → "{c["new"]}"'
+                for c in changes[:20]
+            )
+            suffix = f"\n  ... 共 {len(changes)} 处变更" if len(changes) > 20 else ""
+            return f"dry_run 预览:\n{preview}{suffix}"
+        return (f"PPTX 已修改: {result['slides']} 页幻灯片, "
+                f"{result['shapes_affected']} 个形状受影响, "
+                f"{result['runs_modified']} 个文本段已更新")
+    except Exception as exc:
+        return f"Error: PPTX 修改失败: {exc}"
+
+
+# ── Browser tools (conditional on HTTP bridge) ──────────────────────
+
+
+if os.environ.get("WFM_BROWSER_API_PORT"):
+    from .browser_tools import register as _register_browser_tools  # noqa: PLC0415
+
+    _register_browser_tools(mcp)
+
+
 if __name__ == "__main__":
     mcp.run()

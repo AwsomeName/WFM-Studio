@@ -76,6 +76,17 @@ export class LocalAgentsSessionsController extends Disposable implements IChatSe
 				return;
 			}
 
+			// WFM patch: 上游只在 `tryUpdateLiveSessionItem` 里 fire `addedOrUpdated`，
+			// 而 `tryUpdateLiveSessionItem` 要求 _items 里已有该 resource 才 fire。
+			// 但 `refresh()` 本身从来不广播事件，所以新建 model 走到这里时虽然
+			// _items 已经 add 了新 item，SESSIONS view 不知道，列表不会刷新。
+			// 这就是「点 New Session 列表没反应」的第二个原因。
+			// 显式广播一次：把新加入的 live item 推给 SESSIONS。
+			const added = this._items.get(model.sessionResource);
+			if (added) {
+				this._onDidChangeChatSessionItems.fire({ addedOrUpdated: [added] });
+			}
+
 			this.tryUpdateLiveSessionItem(model);
 
 			const requestChangeListener = model.lastRequestObs.map(last => last?.response && observableSignalFromEvent('chatSessions.modelRequestChangeListener', last.response.onDidChange));
@@ -170,11 +181,14 @@ export class LocalAgentsSessionsController extends Disposable implements IChatSe
 	private toChatSessionItem(chat: IChatDetail): LocalChatSessionItem | undefined {
 		const model = this.chatService.getSession(chat.sessionResource);
 
-		if (model) {
-			if (!model.hasRequests) {
-				return undefined; // ignore sessions without requests
-			}
-		} else if (chat.isActive) {
+		// WFM patch: 上游硬规则是「session 必须有 ≥1 个 request 才进 SESSIONS 列表」。
+		// 这导致用户点 "New Session" 4 次（每次都还没发消息）后列表仍然是空的，
+		// 心智模型严重不符（用户期待 Cursor tab 一样「点一下就出现一个 tab」）。
+		// WFM 改成：
+		//   - live session（chat model 还活着）：始终显示，不管 requests 数量。
+		//     这样新建空 session 立刻出现在列表里，可以来回切换。
+		//   - 没有 chat model 的 active 条目：仍然过滤掉（避免幽灵条目）。
+		if (!model && chat.isActive) {
 			// Sessions that are active but don't have a chat model are ultimately untitled with no requests
 			return undefined;
 		}

@@ -52,14 +52,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ───────── 第 1 步：停掉所有运行中的 IDE Electron 进程 ─────────
-# 命中范围（按可执行文件路径精确匹配，避免误杀别的 Electron 应用）：
+# 命中范围（用品牌/可执行名做锚点，路径前缀不限定 —— code.sh 偶尔会以
+# 相对路径 `./.build/electron/...` 启动 main 进程，绝对路径 pattern 抓不到）：
 #   - 主进程： .build/electron/WFM Studio.app/Contents/MacOS/WFM Studio
 #   - Helper：  .../WFM Studio Helper.app/Contents/MacOS/...
 #   - Linux：    .build/electron/code-oss
 #   - 同时清理还在前台等 IDE 退出的旧 dev.sh / code.sh 包装脚本
 PATTERNS=(
-	"wfm-ide/\.build/electron/.*WFM Studio"
-	"wfm-ide/\.build/electron/code-oss"
+	"\.build/electron/.*WFM Studio"
+	"\.build/electron/.*code-oss"
 	"wfm-ide/scripts/code\.sh"
 	"$ROOT_DIR/scripts/dev\.sh"
 )

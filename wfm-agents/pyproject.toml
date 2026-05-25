@@ -11,6 +11,8 @@ dependencies = [
     "build123d>=0.10.0",
     "trimesh>=4.12.2",
     "shapely>=2.0",
+    "openpyxl>=3.1",
+    "python-pptx>=1.0.0",
 ]
 
 [project.optional-dependencies]

@@ -10,6 +10,7 @@
  *  without a chat extension installed.
  *--------------------------------------------------------------------------------------------*/
 
+import { decodeBase64, encodeBase64, VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { Disposable, IDisposable } from '../../../../base/common/lifecycle.js';
@@ -25,7 +26,9 @@ import { Registry } from '../../../../platform/registry/common/platform.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { Extensions as WorkbenchExtensions, IWorkbenchContribution, IWorkbenchContributionsRegistry } from '../../../common/contributions.js';
 import { LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
-import { IWfmClaudeEvent, IWfmClaudeService } from '../../../../platform/wfmClaude/common/wfmClaude.js';
+import { IWfmClaudeEvent, IWfmClaudeImageAttachment, IWfmClaudeService } from '../../../../platform/wfmClaude/common/wfmClaude.js';
+import { BrowserViewUri } from '../../../../platform/browserView/common/browserViewUri.js';
+import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { ChatContextKeys } from '../../chat/common/actions/chatContextKeys.js';
 import {
 	IChatAgentData,
@@ -34,7 +37,7 @@ import {
 	IChatAgentResult,
 	IChatAgentService,
 } from '../../chat/common/participants/chatAgents.js';
-import { IChatRequestVariableEntry, isImplicitVariableEntry } from '../../chat/common/attachments/chatVariableEntries.js';
+import { IChatRequestVariableEntry, isImageVariableEntry, isImplicitVariableEntry } from '../../chat/common/attachments/chatVariableEntries.js';
 import { ChatAgentLocation, ChatModeKind } from '../../chat/common/constants.js';
 import {
 	IChatMarkdownContent,
@@ -66,6 +69,7 @@ export class WfmClaudeAgentContribution extends Disposable implements IWorkbench
 		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
 		@IContextKeyService private readonly contextKeyService: IContextKeyService,
 		@ILogService private readonly logService: ILogService,
+		@IEditorService private readonly editorService: IEditorService,
 	) {
 		super();
 		this._bypassChatSetupGates();
@@ -187,6 +191,7 @@ export class WfmClaudeAgentContribution extends Disposable implements IWorkbench
 						if (meta) {
 							progress([this._toolInvocationSerialized(evt.toolCallId, meta.toolName, meta.toolInput, evt.outputSummary)]);
 							pendingTools.delete(evt.toolCallId);
+							this._tryOpenBrowserEditor(meta.toolName, evt.outputSummary);
 						}
 						break;
 					}
@@ -223,6 +228,7 @@ export class WfmClaudeAgentContribution extends Disposable implements IWorkbench
 				workspaceRoot,
 				sessionId: previousSessionId,
 				model: request.userSelectedModelId,
+				images: this._collectInlineImages(request),
 			}).catch((err) => {
 				sub.dispose();
 				const msg = err instanceof Error ? err.message : String(err);
@@ -253,9 +259,9 @@ export class WfmClaudeAgentContribution extends Disposable implements IWorkbench
 		// 同 (path, range) 组合去重；纯 path 也单独去重一次。
 		const seenWithRange = new Set<string>();
 		const refs: string[] = [];
-		// docx 这种二进制文件，"行号"实际上是 webview 注入的段落 index；
+		// docx / pptx 这种二进制文件，"行号"实际上是 webview 注入的结构索引；
 		// 给 Claude 的 @path 后面单独跟一条人类语义的提示，agent 拿到能直接理解。
-		const docxNotes: string[] = [];
+		const officeNotes: string[] = [];
 
 		for (const entry of entries as readonly IChatRequestVariableEntry[]) {
 			if (isImplicitVariableEntry(entry) && entry.enabled === false) {
@@ -273,15 +279,30 @@ export class WfmClaudeAgentContribution extends Disposable implements IWorkbench
 			const refPath = rel ?? uri.fsPath;
 
 			// range 仅在文件附件 + Location 形式 (value: { uri, range }) 时存在。
-			const rawValue = (entry as { value?: unknown }).value as { range?: { startLineNumber?: number; endLineNumber?: number } } | undefined;
+			// pptx 选区会把 shape/run 信息编码到 startColumn/endColumn，因此这里把列也取出来。
+			const rawValue = (entry as { value?: unknown }).value as {
+				range?: {
+					startLineNumber?: number; endLineNumber?: number;
+					startColumn?: number; endColumn?: number;
+				};
+			} | undefined;
 			const range = rawValue && typeof rawValue === 'object' && rawValue.range
 				&& typeof rawValue.range.startLineNumber === 'number'
 				&& typeof rawValue.range.endLineNumber === 'number'
-				? { start: rawValue.range.startLineNumber, end: rawValue.range.endLineNumber }
+				? {
+					start: rawValue.range.startLineNumber,
+					end: rawValue.range.endLineNumber,
+					startCol: typeof rawValue.range.startColumn === 'number' ? rawValue.range.startColumn : undefined,
+					endCol: typeof rawValue.range.endColumn === 'number' ? rawValue.range.endColumn : undefined,
+				}
 				: undefined;
 
 			const isDocx = /\.docx$/i.test(refPath);
-			const dedupeKey = range ? `${refPath}#${range.start}-${range.end}` : refPath;
+			const isPptx = /\.pptx$/i.test(refPath);
+			// pptx 的 dedupe 也要带 startCol/endCol，否则同一页不同形状会被认为重复
+			const dedupeKey = range
+				? (isPptx ? `${refPath}#${range.start}-${range.end}:${range.startCol}-${range.endCol}` : `${refPath}#${range.start}-${range.end}`)
+				: refPath;
 			if (seenWithRange.has(dedupeKey)) {
 				continue;
 			}
@@ -296,7 +317,25 @@ export class WfmClaudeAgentContribution extends Disposable implements IWorkbench
 				const label = range.start === range.end
 					? `第 ${range.start} 段`
 					: `第 ${range.start}-${range.end} 段`;
-				docxNotes.push(`[Word 选区 · ${refPath} · ${label}]`);
+				officeNotes.push(`[Word 选区 · ${refPath} · ${label}]`);
+			} else if (range && isPptx) {
+				// pptx 编码方案见 pptxViewerEditor.ts:handleSelectionToChat
+				//   startLineNumber = slideIdx + 1            （1-based 页码）
+				//   startColumn     = shapeIdx + 1            （1-based 形状号；1 表示"未识别到具体形状/整页"）
+				//   endColumn       = runEnd + 1              （>0 表示选中文字定位到该 run）
+				refs.push(`@${quote(refPath)}`);
+				const slideLabel = `第 ${range.start} 页`;
+				const shapeIdx = range.startCol !== undefined ? range.startCol - 1 : -1;
+				const runEnd = range.endCol !== undefined ? range.endCol - 1 : -1;
+				let label = slideLabel;
+				if (shapeIdx >= 0) {
+					// shape index 是 webview 端递归扁平化后的 model node index
+					label += ` · 形状 #${shapeIdx + 1}`;
+					if (runEnd >= 0) {
+						label += ` · 第 ${runEnd + 1} 个 run（文本片段）`;
+					}
+				}
+				officeNotes.push(`[PPT 选区 · ${refPath} · ${label}]`);
 			} else if (range) {
 				// 文本类（dxf、源码、md …）：Claude Code CLI 接受 `@path#L3-L5` 行号语法。
 				refs.push(`@${quote(refPath)}#L${range.start}-L${range.end}`);
@@ -305,11 +344,116 @@ export class WfmClaudeAgentContribution extends Disposable implements IWorkbench
 			}
 		}
 
-		if (refs.length === 0 && docxNotes.length === 0) {
+		if (refs.length === 0 && officeNotes.length === 0) {
 			return userText;
 		}
-		const head = [refs.join(' '), ...docxNotes].filter(s => s.length > 0).join('\n');
+		const head = [refs.join(' '), ...officeNotes].filter(s => s.length > 0).join('\n');
 		return `${head}\n\n${userText}`;
+	}
+
+	/**
+	 * Pull pasted / dropped image attachments out of the request so the main
+	 * service can materialise them to disk. The CLI doesn't accept inline
+	 * bytes, so without this step images attached in the chat input would be
+	 * silently ignored — the model would only see the user's text.
+	 *
+	 * URL-only image entries (`isURL: true`) are skipped: claude can't fetch
+	 * URLs from the prompt, and stitching the URL as text is misleading.
+	 * Future work could prefetch them, but the failure mode "image silently
+	 * lost" only ever happened for pasted-bytes attachments in practice.
+	 */
+	private _collectInlineImages(request: IChatAgentRequest): IWfmClaudeImageAttachment[] | undefined {
+		const entries = request.variables?.variables ?? [];
+		if (entries.length === 0) {
+			return undefined;
+		}
+		// Diagnostic: log entry shape so regressions where the chat UI changes
+		// how it labels image attachments (e.g. swaps `kind: 'image'` for a
+		// pasted-bytes variant) are immediately visible in `ide.log`.
+		this.logService.info(
+			`[wfm-claude-agent] inline-image scan: ${entries.length} entries `
+			+ `kinds=[${entries.map(e => e.kind).join(', ')}]`,
+		);
+		const images: IWfmClaudeImageAttachment[] = [];
+		const seenIds = new Set<string>();
+		for (const entry of entries as readonly IChatRequestVariableEntry[]) {
+			// Primary path: explicit image kind. Secondary path: any entry that
+			// carries raw bytes + an image/* MIME type — covers upstream
+			// reshuffles (e.g. paste edits that land as kind:'paste' with
+			// imageBlob alongside) so we don't silently drop attachments again.
+			const isImageByKind = isImageVariableEntry(entry);
+			const candidateBytes = this._extractImageBytes((entry as { value?: unknown }).value);
+			const mime = (entry as { mimeType?: string }).mimeType ?? '';
+			const isImageByBytes = !!candidateBytes && mime.startsWith('image/');
+			if (!isImageByKind && !isImageByBytes) {
+				continue;
+			}
+			if (seenIds.has(entry.id)) {
+				continue;
+			}
+			seenIds.add(entry.id);
+			const isURL = (entry as { isURL?: boolean }).isURL ?? false;
+			this.logService.info(
+				`[wfm-claude-agent] image entry kind=${entry.kind} name=${entry.name} `
+				+ `mime=${mime} viaKind=${isImageByKind} viaBytes=${isImageByBytes} isURL=${isURL}`,
+			);
+			if (isURL) {
+				this.logService.warn(`[wfm-claude-agent] dropping URL image attachment (name=${entry.name}); URL fetch not implemented`);
+				continue;
+			}
+			const bytes = candidateBytes ?? this._extractImageBytes((entry as { value?: unknown }).value);
+			if (!bytes) {
+				this.logService.warn(`[wfm-claude-agent] image attachment ${entry.name} has no usable bytes (value type=${typeof (entry as { value?: unknown }).value})`);
+				continue;
+			}
+			images.push({
+				name: entry.name,
+				mimeType: mime || undefined,
+				// Base64 over IPC: see note in `IWfmClaudeImageAttachment`.
+				// `vscode-ipc` only preserves binary types as top-level values,
+				// so nested `Uint8Array` / `VSBuffer` arrive on main as a
+				// plain `{ "0": n, "1": n, … }` object.
+				dataBase64: encodeBase64(VSBuffer.wrap(bytes)),
+			});
+		}
+		return images.length > 0 ? images : undefined;
+	}
+
+	private _extractImageBytes(value: unknown): Uint8Array | undefined {
+		if (value instanceof Uint8Array) {
+			return value;
+		}
+		// Image entries restored from history get round-tripped through
+		// `toExport`/`fromExport`; in-memory the raw bytes should already be
+		// re-hydrated, but be defensive in case we ever get the serialised
+		// shape `{ $base64: string }` here.
+		if (value && typeof value === 'object' && '$base64' in (value as Record<string, unknown>)) {
+			const b64 = (value as { $base64: unknown }).$base64;
+			if (typeof b64 === 'string') {
+				try {
+					return decodeBase64(b64).buffer;
+				} catch {
+					return undefined;
+				}
+			}
+		}
+		// `VSBuffer` shape: { buffer: Uint8Array, byteLength: number }. Some
+		// chat-paste edits surface attachments through IPC where the bytes
+		// arrive as a plain VSBuffer-like object rather than a Uint8Array.
+		if (value && typeof value === 'object') {
+			const maybeBuf = (value as { buffer?: unknown }).buffer;
+			if (maybeBuf instanceof Uint8Array) {
+				return maybeBuf;
+			}
+			if (maybeBuf instanceof ArrayBuffer) {
+				return new Uint8Array(maybeBuf);
+			}
+		}
+		// Raw ArrayBuffer fallback.
+		if (value instanceof ArrayBuffer) {
+			return new Uint8Array(value);
+		}
+		return undefined;
 	}
 
 	private _md(text: string): IChatMarkdownContent {
@@ -339,6 +483,25 @@ export class WfmClaudeAgentContribution extends Disposable implements IWorkbench
 				output: outputSummary,
 			},
 		};
+	}
+
+	private _tryOpenBrowserEditor(toolName: string, outputSummary: string): void {
+		if (toolName !== 'browser_open') { return; }
+		try {
+			// outputSummary may be truncated; try to extract pageId from the JSON.
+			const match = outputSummary.match(/"pageId"\s*:\s*"([^"]+)"/);
+			if (!match) { return; }
+			const pageId = match[1];
+			const urlMatch = outputSummary.match(/"url"\s*:\s*"([^"]+)"/);
+			const url = urlMatch ? urlMatch[1] : '';
+			const browserUri = BrowserViewUri.forId(pageId);
+			this.editorService.openEditor({
+				resource: browserUri,
+				options: { pinned: true, viewState: { url } },
+			});
+		} catch (err) {
+			this.logService.warn(`[wfm-claude] failed to open browser editor: ${(err as Error).message}`);
+		}
 	}
 
 	private _resolveWorkspaceRoot(): string | undefined {

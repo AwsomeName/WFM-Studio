@@ -15,3 +15,8 @@ local.properties
 *.env
 !.env.example
 .envrc
+
+# 构建产物
+.build/
+VSCode-darwin-arm64/
+out/
