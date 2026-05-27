@@ -706,7 +706,23 @@ function copyWfmBackendTask(destinationFolderName: string) {
 	};
 }
 
-function copyCopilotNativeDepsTask(platform: string, arch: string, destinationFolderName: string) {
+function copyClaudeCliTask(destinationFolderName: string) {
+		const outputDir = path.join(path.dirname(root), destinationFolderName);
+		return async () => {
+			const resourcesDir = path.join(outputDir, `${product.nameLong}.app`, 'Contents', 'Resources');
+			const cliDir = path.join(resourcesDir, 'claude-cli');
+			const sourceDir = path.join(path.dirname(root), '.build', 'claude-cli');
+			if (fs.existsSync(sourceDir)) {
+				console.log(`Copying claude-cli to ${cliDir}...`);
+				await fs.promises.cp(sourceDir, cliDir, { recursive: true });
+				console.log(`claude-cli copied (${(await fs.promises.stat(cliDir)).size} bytes)`);
+			} else {
+				console.log('Skipping claude-cli (not built): run scripts/build-claude-cli.sh first');
+			}
+		};
+	}
+
+	function copyCopilotNativeDepsTask(platform: string, arch: string, destinationFolderName: string) {
 	const outputDir = path.join(path.dirname(root), destinationFolderName);
 
 	return async () => {
@@ -750,7 +766,7 @@ BUILD_TARGETS.forEach(buildTarget => {
 			util.rimraf(path.join(buildRoot, destinationFolderName)),
 			packageTask(platform, arch, sourceFolderName, destinationFolderName, opts),
 			copyCopilotNativeDepsTask(platform, arch, destinationFolderName),
-			...(platform === 'darwin' ? [copyWfmBackendTask(destinationFolderName)] : []),
+			...(platform === 'darwin' ? [copyWfmBackendTask(destinationFolderName), copyClaudeCliTask(destinationFolderName)] : []),
 		];
 
 		if (platform === 'win32') {

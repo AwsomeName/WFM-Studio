@@ -50,7 +50,7 @@ class DocxViewerEditorContribution implements IWorkbenchContribution {
 			{
 				id: DocxViewerEditorInput.ID,
 				label: DOCX_VIEWER_EDITOR_LABEL,
-				priority: RegisteredEditorPriority.option,
+				priority: RegisteredEditorPriority.default,
 			},
 			{
 				singlePerResource: true,

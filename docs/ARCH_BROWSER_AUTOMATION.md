@@ -2,6 +2,8 @@
 
 > 状态：方案 A 已落地（MCP HTTP → 主进程 IPC → 渲染进程 IPlaywrightService + IEditorService.openEditor）
 > 日期：2026-05-24（落地）/ 2026-05-24（最初调研）
+>
+> **架构演进讨论（2026-05-25）**：混合模式（主编辑区 attach + 偶尔外部 Chrome for Testing）在真实站点上体验分裂、自动化不稳定。倾向 **方案 3：独立 Chrome for Testing + 主编辑区 screencast 预览**。详见 [ARCH_BROWSER_AUTOMATION_V2.md](./ARCH_BROWSER_AUTOMATION_V2.md)。
 
 ## 1. 场景
 
@@ -173,7 +175,9 @@ Chat → claude CLI → wfm_mcp_server (Python)
 
 ## 6. 下一步
 
-1. **确认连通方案**：与用户确认选 A/B/C 哪个方案
-2. **实现 `browser_mcp_server`**（若选 A）：Node MCP 服务器，调用 VS Code Extension API 操控浏览器
-3. **更新 `_buildMcpConfigJson()`**：将新 MCP 服务器加入 WFM Agent 的 MCP 配置
-4. **端到端测试**：在 WFM Chat 中输入"打开 oa.company.com"验证完整流程
+方案 A 连通与 Phase 1 绑定已完成。后续方向见 [ARCH_BROWSER_AUTOMATION_V2.md](./ARCH_BROWSER_AUTOMATION_V2.md)：
+
+1. **拍板方案 3 产品定位**（Agent 浏览器 = 独立 Chromium，编辑区 = screencast）
+2. **Step 1 POC**：launch + canvas screencast，验证延迟与画质
+3. **Step 2–3**：CDP 8 动作 + MCP 切底层 + 输入转发 / 逃生窗口
+4. **旧链路**：WebContentsView 浏览器保留给用户手动浏览，Agent 不再 attach

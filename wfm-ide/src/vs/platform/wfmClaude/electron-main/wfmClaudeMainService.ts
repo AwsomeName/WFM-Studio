@@ -117,7 +117,9 @@ export class WfmClaudeMainService extends Disposable implements IWfmClaudeServic
 
 		let child: ChildProcess;
 		try {
-			child = spawn('claude', args, {
+			const claudeBin = this._resolveClaudeBin();
+			this.logService.info(`[wfm-claude] using binary: ${claudeBin}`);
+			child = spawn(claudeBin, args, {
 				cwd: workspaceRoot,
 				env: { ...process.env },
 				stdio: ['ignore', 'pipe', 'pipe'],
@@ -126,7 +128,7 @@ export class WfmClaudeMainService extends Disposable implements IWfmClaudeServic
 			if (tempDir) {
 				this._removeTempDir(tempDir);
 			}
-			throw new Error(`[wfm-claude] failed to spawn 'claude' (is it on PATH?): ${(err as Error).message}`);
+			throw new Error(`[wfm-claude] failed to spawn claude: ${(err as Error).message}`);
 		}
 
 		const turn: IActiveTurn = { turnId, process: child, tempDir, stopped: false };
@@ -360,6 +362,28 @@ export class WfmClaudeMainService extends Disposable implements IWfmClaudeServic
 		}
 		// Best-effort fallback so the spawn error surfaces a useful path.
 		return candidates[0];
+	}
+
+	private _resolveClaudeBin(): string {
+		// Override via env var.
+		const override = process.env.WFM_CLAUDE_BIN;
+		if (override && fs.existsSync(override)) {
+			return override;
+		}
+
+		const appRoot = this.environmentMainService.appRoot;
+		// Packaged: claude-cli lives at Resources/claude-cli/claude (macOS .app layout).
+		const packagedCli = path.resolve(appRoot, '..', 'claude-cli', 'claude');
+		if (fs.existsSync(packagedCli)) {
+			return packagedCli;
+		}
+		// Dev fallback: .build/claude-cli/claude relative to repo root.
+		const devCli = path.resolve(appRoot, '..', '.build', 'claude-cli', 'claude');
+		if (fs.existsSync(devCli)) {
+			return devCli;
+		}
+		// Last resort: rely on PATH.
+		return 'claude';
 	}
 
 	private _wireStdout(turn: IActiveTurn, cadSourceUri: string | undefined): void {

@@ -28,14 +28,18 @@ ok()   { printf '%s[build-dmg]%s %s%s%s\n' "$C_CYN" "$C_RST" "$C_GRN" "$*" "$C_R
 
 # ─── Step 1: 构建 Python 后端 ───
 if [[ $SKIP_BACKEND -eq 0 ]]; then
-  log "Step 1/3: 构建 Python 后端（含 CAD 工具链）..."
+  log "Step 1/4: 构建 Python 后端（含 CAD 工具链）..."
   "$ROOT_DIR/scripts/build-backend.sh" --with-cad
 else
-  log "Step 1/3: 跳过后端构建 (--skip-backend)"
+  log "Step 1/4: 跳过后端构建 (--skip-backend)"
 fi
 
-# ─── Step 2: 编译并打包 WFM Studio.app ───
-log "Step 2/3: 编译并打包 WFM Studio.app..."
+# ─── Step 2: 构建 Claude Code CLI ───
+log "Step 2/4: 构建 Claude Code CLI..."
+"$ROOT_DIR/scripts/build-claude-cli.sh"
+
+# ─── Step 3: 编译并打包 WFM Studio.app ───
+log "Step 3/4: 编译并打包 WFM Studio.app..."
 cd "$ROOT_DIR/wfm-ide"
 
 if [[ ! -x node_modules/.bin/npm-run-all2 ]]; then
@@ -52,8 +56,8 @@ if [[ ! -d "$APP_PATH" ]]; then
 fi
 ok "WFM Studio.app 打包完成"
 
-# ─── Step 3: 生成 DMG ───
-log "Step 3/3: 生成 DMG..."
+# ─── Step 4: 生成 DMG ───
+log "Step 4/4: 生成 DMG..."
 mkdir -p "$ROOT_DIR/out"
 
 VSCODE_ARCH=arm64 node build/darwin/create-dmg.ts \

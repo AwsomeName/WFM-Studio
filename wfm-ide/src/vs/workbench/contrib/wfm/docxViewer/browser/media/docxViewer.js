@@ -121,7 +121,11 @@
 	}
 
 	var selectionTimer = null;
-	document.addEventListener('mouseup', function () {
+	document.addEventListener('mouseup', function (e) {
+		// Only show floating toolbar on left-button mouseup — right-button
+		// should not trigger the toolbar (it would reappear 80 ms after
+		// right-click and steal focus from the custom context menu).
+		if (e.button !== 0) { return; }
 		// Small delay to let the browser finalize selection
 		clearTimeout(selectionTimer);
 		selectionTimer = setTimeout(showToolbar, 80);
@@ -165,6 +169,10 @@
 		var data = resolveSelection();
 		if (!data) { return; }
 		ctxMenu.hidden = false;
+		// Record the moment the context menu was shown so the blur
+		// handler can avoid closing it immediately (VS Code webviews
+		// may fire a short blur on right-click).
+		ctxMenuShowTime = Date.now();
 		// Position with viewport clamping
 		var vw = window.innerWidth;
 		var vh = window.innerHeight;
@@ -177,6 +185,8 @@
 		if (ctxMenu) { ctxMenu.hidden = true; }
 	}
 
+	var ctxMenuShowTime = 0;
+
 	document.addEventListener('contextmenu', function (e) {
 		// 只有当存在文字选区时才接管右键。无选区放行（保留浏览器/webview 默认行为）。
 		var sel = window.getSelection();
@@ -184,6 +194,9 @@
 		var data = resolveSelection();
 		if (!data) { return; }
 		e.preventDefault();
+		// Cancel any pending toolbar show — without this the toolbar would
+		// reappear 80 ms after right-click, overlapping the context menu.
+		clearTimeout(selectionTimer);
 		showContextMenu(e.clientX, e.clientY);
 		hideToolbar();
 	});
@@ -195,7 +208,13 @@
 	}, true);
 
 	document.addEventListener('scroll', function () { hideContextMenu(); }, true);
-	window.addEventListener('blur', function () { hideContextMenu(); });
+	window.addEventListener('blur', function () {
+		// In VS Code webviews a right-click can cause a momentary blur.
+		// Guard: if the context menu was opened less than 300 ms ago,
+		// ignore the blur so the menu stays visible.
+		if (ctxMenuShowTime && (Date.now() - ctxMenuShowTime < 300)) { return; }
+		hideContextMenu();
+	});
 
 	if (ctxMenu) {
 		ctxMenu.addEventListener('click', function (e) {
